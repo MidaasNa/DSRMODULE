@@ -2002,7 +2002,7 @@ function computeInvoiceTotalsClient_(f){
   const nights = daysBetweenClient_(f.checkin, f.checkout) || Number(f.nights) || 0;
   const price = Number(f.pricePerNight) || 0;
   const markup = Number(f.markupPerNight) || 0;
-  const commission = Number(f.commission) || 0;
+  const commissionPct = Number(f.commission) || 0;
   const taxPct = Number(f.taxPercent) || 0;
   const serviceCharge = Number(f.serviceCharge) || 0;
   const reward = Number(f.reward) || 0;
@@ -2015,12 +2015,15 @@ function computeInvoiceTotalsClient_(f){
   const totalRoomCost = price * nights;
   const totalMarkup = markup * nights;
   const taxAmount = price * (taxPct/100) * nights;
+  // Commission is paid TO us BY the hotel after checkout — a % of the
+  // pre-tax room rate, so it's off Price/Night, never off Selling Price.
+  const commissionAmount = price * (commissionPct/100) * nights;
   const netHotelCost = totalRoomCost + taxAmount;
   const sellingPrice = netHotelCost + totalMarkup + serviceCharge + totalCustomCharges;
   const gstAmount = sellingPrice * (gstPct/100);
   const totalBilled = sellingPrice + gstAmount;
   const totalBilledINR = totalBilled * roe;
-  const profit = totalMarkup + (commission*nights) + serviceCharge - reward;
+  const profit = totalMarkup + commissionAmount + serviceCharge - reward;
   const profitPercent = totalBilled > 0 ? (profit/totalBilled)*100 : 0;
 
   // Total Amount follows Billing Instructions, not the Currency dropdown —
@@ -2032,6 +2035,7 @@ function computeInvoiceTotalsClient_(f){
 
   const r2 = n => Math.round(n*100)/100;
   return { nights, totalRoomCost:r2(totalRoomCost), totalMarkup:r2(totalMarkup), taxAmount:r2(taxAmount),
+    commissionAmount:r2(commissionAmount),
     totalCustomCharges:r2(totalCustomCharges), netHotelCost:r2(netHotelCost), sellingPrice:r2(sellingPrice),
     gstAmount:r2(gstAmount), totalBilled:r2(totalBilled), totalBilledINR:r2(totalBilledINR),
     profit:r2(profit), profitPercent:r2(profitPercent), settlementCurrency, totalAmount:r2(totalAmount) };
@@ -2153,7 +2157,7 @@ function renderInvoiceModal_(rowId, rec, existing){
               ['No','Yes'].map(o => '<option' + ((v.gstBilled||'No')===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
             invoiceFieldRow_('GST % (if billed)', '<input type="number" step="0.01" id="inv_gstPercent" value="' + escapeHtml(String(v.gstPercent ?? 18)) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Tax Charged by Hotel (%)', '<input type="number" step="0.01" id="inv_taxPercent" value="' + escapeHtml(String(v.taxPercent ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Commission (per night)', '<input type="number" step="0.01" id="inv_commission" value="' + escapeHtml(String(v.commission ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+            invoiceFieldRow_('Commission % (from hotel, pre-tax)', '<input type="number" step="0.01" id="inv_commission" value="' + escapeHtml(String(v.commission ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Service Charge', '<input type="number" step="0.01" id="inv_serviceCharge" value="' + escapeHtml(String(v.serviceCharge ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Rewards (optional)', '<input type="number" step="0.01" id="inv_reward" value="' + escapeHtml(String(v.reward ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Confirmation Number', '<input id="inv_confirmationNumber" value="' + escapeHtml(v.confirmationNumber || (rec&&rec.confirmationNumber) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
@@ -2230,7 +2234,7 @@ function recalcInvoiceTotals_(){
     'GST: <b>' + t.gstAmount.toFixed(2) + '</b> &nbsp;·&nbsp; ' +
     'Total Billed: <b>' + t.totalBilled.toFixed(2) + ' ' + escapeHtml(fields.currency||'INR') + '</b><br>' +
     'Total Amount (per Billing Instructions): <b style="color:#003366;font-size:16px">' + t.totalAmount.toFixed(2) + ' ' + escapeHtml(t.settlementCurrency) + '</b><br>' +
-    '<span style="color:#4a5560">Profit: ' + t.profit.toFixed(2) + ' (' + t.profitPercent.toFixed(1) + '%)</span>';
+    '<span style="color:#4a5560">Commission (from hotel): ' + t.commissionAmount.toFixed(2) + ' &nbsp;·&nbsp; Profit: ' + t.profit.toFixed(2) + ' (' + t.profitPercent.toFixed(1) + '%)</span>';
 }
 
 async function saveInvoice_(rowId, invoiceNumber){
@@ -2338,9 +2342,9 @@ const DSR_COLUMNS_ = [
   ['adults','Adults',60,false], ['children','Children',60,false], ['roomType','Room',90,false],
   ['pricePerNight','Price/Night',100,true], ['markupPerNight','Markup/Night',100,false],
   ['currency','Ccy',60,false], ['roe','ROE',70,false],
-  ['gstBilled','GST',55,false], ['taxPercent','Hotel Tax %',85,false], ['commission','Commission',90,false],
+  ['gstBilled','GST',55,false], ['taxPercent','Hotel Tax %',85,false], ['commission','Commission %',90,false],
   ['serviceCharge','Svc Charge',90,false], ['reward','Rewards',80,false], ['billingInstruction','Billing Instr.',105,true],
-  ['totalRoomCost','Total Room Cost',110,false], ['totalMarkup','Total Markup',105,false],
+  ['totalRoomCost','Total Room Cost',110,false], ['totalMarkup','Total Markup',105,false], ['commissionAmount','Commission Amt',105,false],
   ['netHotelCost','Net Hotel Cost',110,false], ['sellingPrice','Selling Price',110,true],
   ['gstAmount','GST Amt',90,false], ['totalBilled','Total Billed',110,true], ['totalBilledINR','Total (INR)',110,false],
   ['totalAmount','Total Amount',130,true], ['settlementCurrency','Settlement Ccy',100,false],
