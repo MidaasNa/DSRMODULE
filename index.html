@@ -423,7 +423,7 @@ tr.overdue-row td{border-color:#f3d4c0}
 /* =====================================================================
    CONFIG
    ===================================================================== */
-const API_URL = 'https://script.google.com/macros/s/AKfycbzMo7wV3_4WRAWgpTHQm3171SCc16tZPn2qXv_sjh7etlS2rD4M9x9GDkamwitfTFzJlw/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbwMPN1QM4OGl0YY_E7nC5lbg8wgHuxizMtRrahurVIvSEhzEHQ25Qe_5Ubw5x_v7HyrEw/exec';
 const AUTO_REFRESH_MS = 15000;
 
 const STATUS_FLOW = ['Pending','Waiting for Client Response','Confirmed'];
@@ -534,12 +534,18 @@ async function apiGet(params){
 }
 
 async function apiPost(payload){
-  const res = await fetch(API_URL, {
-    method:'POST',
-    headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify(payload)
-  });
-  if (!res.ok) throw new Error('POST failed: ' + res.status);
+  if (!API_URL || API_URL === 'PASTE_YOUR_WEB_APP_URL_HERE') {
+    throw new Error('API_URL is not set. Paste your Apps Script Web App URL near the top of the <script> section.');
+  }
+  // Sent as GET with the payload in the query string, not as a POST body.
+  // Apps Script's /exec URL redirects to script.googleusercontent.com,
+  // and on some hosting setups that redirect silently drops a POST
+  // request's body before it reaches the server — GET isn't affected by
+  // that, so every write goes over GET here (Code.gs's doGet routes a
+  // ?payload= param to the exact same handlers a POST would hit).
+  const url = API_URL + '?payload=' + encodeURIComponent(JSON.stringify(payload));
+  const res = await fetch(url, { method:'GET', cache:'no-store' });
+  if (!res.ok) throw new Error('Request failed: ' + res.status);
   const json = await res.json();
   if (json.error) throw new Error(json.error);
   return json;
@@ -1964,6 +1970,7 @@ window._dsrColumnLayout = null; // loaded per-user from the backend
 
 const HOTEL_CHAINS_ = ['Marriott','Hilton','IHG','Accor','Hyatt','Radisson','Taj','Oberoi','ITC','Lemon Tree','Other'];
 const CURRENCIES_ = ['INR','USD','EUR','GBP','AED','SGD','MYR','AUD'];
+const BILLING_INSTRUCTIONS_ = ['BTC-INR','BTC-USD','BTC-EUR','DIRECT-INR','DIRECT-USD','DIRECT-EUR','Other'];
 
 async function loadChargeLabelDefaults(){
   try{
@@ -1984,6 +1991,13 @@ function daysBetweenClient_(checkin, checkout){
 
 // Mirrors computeInvoiceTotals_ in Code.gs exactly, for a live preview
 // as someone types. The server recomputes authoritatively on save.
+const KNOWN_CURRENCIES_CLIENT_ = ['INR','USD','EUR','GBP','AED','SGD','MYR','AUD'];
+function parseSettlementCurrencyClient_(billingInstruction){
+  const s = String(billingInstruction||'').toUpperCase();
+  const suffix = s.indexOf('-') !== -1 ? s.split('-').pop().trim() : '';
+  return KNOWN_CURRENCIES_CLIENT_.indexOf(suffix) !== -1 ? suffix : null;
+}
+
 function computeInvoiceTotalsClient_(f){
   const nights = daysBetweenClient_(f.checkin, f.checkout) || Number(f.nights) || 0;
   const price = Number(f.pricePerNight) || 0;
@@ -2009,12 +2023,20 @@ function computeInvoiceTotalsClient_(f){
   const profit = totalMarkup + (commission*nights) + serviceCharge - reward;
   const profitPercent = totalBilled > 0 ? (profit/totalBilled)*100 : 0;
 
+  // Total Amount follows Billing Instructions, not the Currency dropdown —
+  // "...-INR" always converts via ROE; any other "...-XXX" suffix is shown
+  // as-is in that currency (see the matching comment on computeInvoiceTotals_
+  // in Code.gs for the full rule, including its assumptions/limits).
+  const settlementCurrency = parseSettlementCurrencyClient_(f.billingInstruction) || f.currency || 'INR';
+  const totalAmount = settlementCurrency === 'INR' ? totalBilledINR : totalBilled;
+
   const r2 = n => Math.round(n*100)/100;
   return { nights, totalRoomCost:r2(totalRoomCost), totalMarkup:r2(totalMarkup), taxAmount:r2(taxAmount),
     totalCustomCharges:r2(totalCustomCharges), netHotelCost:r2(netHotelCost), sellingPrice:r2(sellingPrice),
     gstAmount:r2(gstAmount), totalBilled:r2(totalBilled), totalBilledINR:r2(totalBilledINR),
-    profit:r2(profit), profitPercent:r2(profitPercent) };
+    profit:r2(profit), profitPercent:r2(profitPercent), settlementCurrency, totalAmount:r2(totalAmount) };
 }
+
 
 function invoiceFieldRow_(labelText, inputHtml){
   return '<div style="margin-bottom:7px"><label style="display:block;font-size:11px;font-weight:600;color:#3f4750;margin-bottom:2px">' +
@@ -2124,7 +2146,9 @@ function renderInvoiceModal_(rowId, rec, existing){
 
           invoiceSectionHeader_('5. Billing') +
           '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
-            invoiceFieldRow_('Billing Instructions', '<input id="inv_billingInstruction" value="' + escapeHtml(v.billingInstruction||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+            invoiceFieldRow_('Billing Instructions', '<select id="inv_billingInstruction" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_billingInstructionOther\').style.display=this.value===\'Other\'?\'block\':\'none\';recalcInvoiceTotals_()">' +
+              BILLING_INSTRUCTIONS_.map(o => '<option' + (v.billingInstruction===o?' selected':'') + '>' + o + '</option>').join('') + '</select>' +
+              '<input id="inv_billingInstructionOther" placeholder="Enter billing instruction" value="' + (BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1?escapeHtml(v.billingInstruction||''):'') + '" style="width:100%;padding:5px;margin-top:3px;box-sizing:border-box;display:' + (v.billingInstruction && BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1 ? 'block':'none') + '" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('GST Billed to Client', '<select id="inv_gstBilled" style="width:100%;padding:5px" onchange="recalcInvoiceTotals_()">' +
               ['No','Yes'].map(o => '<option' + ((v.gstBilled||'No')===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
             invoiceFieldRow_('GST % (if billed)', '<input type="number" step="0.01" id="inv_gstPercent" value="' + escapeHtml(String(v.gstPercent ?? 18)) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
@@ -2174,6 +2198,7 @@ function renderChargesRows_(){
 function readInvoiceFormFields_(){
   const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
   const hotelChain = val('inv_hotelChain') === 'Other' ? val('inv_hotelChainOther') : val('inv_hotelChain');
+  const billingInstruction = val('inv_billingInstruction') === 'Other' ? val('inv_billingInstructionOther') : val('inv_billingInstruction');
   return {
     billingType: val('inv_billingType'), client: val('inv_client'), vendorName: val('inv_vendorName'),
     hotelName: val('inv_hotelName'), guestName: val('inv_guestName'),
@@ -2182,7 +2207,7 @@ function readInvoiceFormFields_(){
     adults: val('inv_adults'), children: val('inv_children'), roomType: val('inv_roomType'),
     pricePerNight: val('inv_pricePerNight'), markupPerNight: val('inv_markupPerNight'),
     currency: val('inv_currency'), roe: val('inv_roe'),
-    billingInstruction: val('inv_billingInstruction'), gstBilled: val('inv_gstBilled'), gstPercent: val('inv_gstPercent'),
+    billingInstruction: billingInstruction, gstBilled: val('inv_gstBilled'), gstPercent: val('inv_gstPercent'),
     taxPercent: val('inv_taxPercent'), commission: val('inv_commission'),
     serviceCharge: val('inv_serviceCharge'), reward: val('inv_reward'),
     confirmationNumber: val('inv_confirmationNumber'), salesPerson: val('inv_salesPerson'), remarks: val('inv_remarks'),
@@ -2203,8 +2228,8 @@ function recalcInvoiceTotals_(){
     'Net Hotel Cost: <b>' + t.netHotelCost.toFixed(2) + '</b><br>' +
     'Selling Price: <b>' + t.sellingPrice.toFixed(2) + '</b> &nbsp;·&nbsp; ' +
     'GST: <b>' + t.gstAmount.toFixed(2) + '</b> &nbsp;·&nbsp; ' +
-    'Total Billed: <b style="color:#003366;font-size:16px">' + t.totalBilled.toFixed(2) + '</b>' +
-    (Number(fields.roe)!==1 ? ' (' + t.totalBilledINR.toFixed(2) + ' INR)' : '') + '<br>' +
+    'Total Billed: <b>' + t.totalBilled.toFixed(2) + ' ' + escapeHtml(fields.currency||'INR') + '</b><br>' +
+    'Total Amount (per Billing Instructions): <b style="color:#003366;font-size:16px">' + t.totalAmount.toFixed(2) + ' ' + escapeHtml(t.settlementCurrency) + '</b><br>' +
     '<span style="color:#4a5560">Profit: ' + t.profit.toFixed(2) + ' (' + t.profitPercent.toFixed(1) + '%)</span>';
 }
 
@@ -2314,10 +2339,11 @@ const DSR_COLUMNS_ = [
   ['pricePerNight','Price/Night',100,true], ['markupPerNight','Markup/Night',100,false],
   ['currency','Ccy',60,false], ['roe','ROE',70,false],
   ['gstBilled','GST',55,false], ['taxPercent','Hotel Tax %',85,false], ['commission','Commission',90,false],
-  ['serviceCharge','Svc Charge',90,false], ['reward','Rewards',80,false],
+  ['serviceCharge','Svc Charge',90,false], ['reward','Rewards',80,false], ['billingInstruction','Billing Instr.',105,true],
   ['totalRoomCost','Total Room Cost',110,false], ['totalMarkup','Total Markup',105,false],
   ['netHotelCost','Net Hotel Cost',110,false], ['sellingPrice','Selling Price',110,true],
   ['gstAmount','GST Amt',90,false], ['totalBilled','Total Billed',110,true], ['totalBilledINR','Total (INR)',110,false],
+  ['totalAmount','Total Amount',130,true], ['settlementCurrency','Settlement Ccy',100,false],
   ['profit','Profit',95,true], ['profitPercent','Profit %',80,true],
   ['salesPerson','Sales Person',110,false], ['branch','Branch',90,false],
   ['createdBy','Created By',100,false], ['createdAt','Created At',130,false]
@@ -2358,6 +2384,7 @@ function dsrColumnLabel_(key){
 
 function dsrCellValue_(row, key){
   if (key === 'checkin' || key === 'checkout' || key === 'createdAt') return toDisplayDate(row[key]) || row[key] || '';
+  if (key === 'totalAmount') return (Number(row.totalAmount)||0).toFixed(2) + ' ' + (row.settlementCurrency || row.currency || 'INR');
   if (typeof row[key] === 'number') return row[key].toFixed(2).replace(/\.00$/,'');
   return row[key] != null ? row[key] : '';
 }
