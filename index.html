@@ -227,6 +227,7 @@ tr.overdue-row td{border-color:#f3d4c0}
   <button class="tab-btn manager-only" data-tab="chartsTab" onclick="switchTab('chartsTab')">📈 Charts</button>
   <button class="tab-btn" data-tab="btcVoucherTab" onclick="switchTab('btcVoucherTab')">🎫 BTC-Voucher</button>
   <button class="tab-btn" data-tab="dsrTab" onclick="switchTab('dsrTab')">🧾 DSR</button>
+  <button class="tab-btn" data-tab="clientsVendorsTab" onclick="switchTab('clientsVendorsTab')">👥 Clients &amp; Vendors</button>
 </div>
 
 <!-- NEW REQUEST TAB -->
@@ -417,13 +418,21 @@ tr.overdue-row td{border-color:#f3d4c0}
 </div>
 </div>
 
+<div id="clientsVendorsTab" class="tab-panel">
+<p style="color:#3f4750">Preloaded Clients and Vendors — pick from these in the DSR entry form instead of retyping. Selecting a known client auto-fills their Sales Person and Service Charge; a known vendor auto-fills their Commission %.</p>
+<div class="card">
+<div id="cvToolbar" style="margin-bottom:12px"></div>
+<div id="cvTableWrap" style="overflow-x:auto"></div>
+</div>
+</div>
+
 </div><!-- /#app -->
 
 <script>
 /* =====================================================================
    CONFIG
    ===================================================================== */
-const API_URL = 'https://script.google.com/macros/s/AKfycbzMo7wV3_4WRAWgpTHQm3171SCc16tZPn2qXv_sjh7etlS2rD4M9x9GDkamwitfTFzJlw/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbwMPN1QM4OGl0YY_E7nC5lbg8wgHuxizMtRrahurVIvSEhzEHQ25Qe_5Ubw5x_v7HyrEw/exec';
 const AUTO_REFRESH_MS = 15000;
 
 const STATUS_FLOW = ['Pending','Waiting for Client Response','Confirmed'];
@@ -498,6 +507,7 @@ function enterApp(){
 
   loadBranchEmployees();
   loadChargeLabelDefaults();
+  loadClientsAndVendors();
   setToday();
   startAutoRefresh();
 }
@@ -594,6 +604,7 @@ function switchTab(tabId){
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === tabId));
   if (tabId === 'dsrTab') { loadAndRenderDsr(); return; }
+  if (tabId === 'clientsVendorsTab') { loadAndRenderClientsVendors(); return; }
   render();
 }
 
@@ -1967,6 +1978,8 @@ async function duplicateTicket(r){
 window._chargeLabelDefaults = [];
 window._dsrRows = [];
 window._dsrColumnLayout = null; // loaded per-user from the backend
+window._clientsList = [];  // [{name, salesPerson, serviceCharge}, ...] — preloaded master list
+window._vendorsList = [];  // ['Vendor A', 'Vendor B', ...]
 
 const HOTEL_CHAINS_ = ['Marriott','Hilton','IHG','Accor','Hyatt','Radisson','Taj','Oberoi','ITC','Lemon Tree','Other'];
 const CURRENCIES_ = ['INR','USD','EUR','GBP','AED','SGD','MYR','AUD'];
@@ -1978,6 +1991,18 @@ async function loadChargeLabelDefaults(){
     window._chargeLabelDefaults = json.labels || [];
   }catch(err){
     console.error('Could not load charge label defaults:', err);
+  }
+}
+
+async function loadClientsAndVendors(){
+  try{
+    const [clientsJson, vendorsJson] = await Promise.all([
+      apiGet({ action:'clients' }), apiGet({ action:'vendors' })
+    ]);
+    window._clientsList = clientsJson.clients || [];
+    window._vendorsList = vendorsJson.vendors || [];
+  }catch(err){
+    console.error('Could not load clients/vendors:', err);
   }
 }
 
@@ -2111,8 +2136,10 @@ function renderInvoiceModal_(rowId, rec, existing){
             invoiceFieldRow_('Billing Type', '<select id="inv_billingType" style="width:100%;padding:5px" ' + (existing?'disabled':'') + '>' +
               ['DIRECT','BTC'].map(o => '<option' + (v.billingType===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
             invoiceFieldRow_('Invoice Number', '<input disabled value="' + (existing ? escapeHtml(existing.invoiceNumber) : 'Generated on Create') + '" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
-            invoiceFieldRow_('Client Name', '<input id="inv_client" value="' + escapeHtml(v.client || (rec&&rec.client) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('Vendor Name', '<input id="inv_vendorName" value="' + escapeHtml(v.vendorName || (rec&&rec.vendor) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+            invoiceFieldRow_('Client Name', '<input id="inv_client" list="inv_clientsDatalist" value="' + escapeHtml(v.client || (rec&&rec.client) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onClientNameInput_()">' +
+              '<datalist id="inv_clientsDatalist">' + window._clientsList.map(c => '<option value="' + escapeHtml(c.name) + '">').join('') + '</datalist>') +
+            invoiceFieldRow_('Vendor Name', '<input id="inv_vendorName" list="inv_vendorsDatalist" value="' + escapeHtml(v.vendorName || (rec&&rec.vendor) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onVendorNameInput_()">' +
+              '<datalist id="inv_vendorsDatalist">' + window._vendorsList.map(vd => '<option value="' + escapeHtml(vd.name) + '">').join('') + '</datalist>') +
             invoiceFieldRow_('Hotel Name', '<input id="inv_hotelName" value="' + escapeHtml(v.hotelName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
             invoiceFieldRow_('Guest Name', '<input id="inv_guestName" value="' + escapeHtml(v.guestName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
           '</div>' +
@@ -2197,6 +2224,40 @@ function renderChargesRows_(){
       '<button onclick="window._invoiceChargesDraft.splice(' + i + ',1);renderChargesRows_();recalcInvoiceTotals_()" style="padding:6px 10px">✕</button>' +
     '</div>'
   ).join('');
+}
+
+// Fires on every keystroke in Client Name; only acts once the typed text
+// exactly matches a known client (case-insensitive) — auto-fills Sales
+// Person and Service Charge from that client's saved defaults, but ONLY
+// into fields that are still empty, so it never overwrites something
+// already typed or an existing invoice's real values while editing.
+function onClientNameInput_(){
+  const clientInput = document.getElementById('inv_client');
+  if (!clientInput) return;
+  const typed = clientInput.value.trim().toLowerCase();
+  if (!typed) return;
+  const match = window._clientsList.find(c => c.name.toLowerCase() === typed);
+  if (!match) return;
+
+  const spEl = document.getElementById('inv_salesPerson');
+  const scEl = document.getElementById('inv_serviceCharge');
+  if (spEl && !spEl.value && match.salesPerson) spEl.value = match.salesPerson;
+  if (scEl && !scEl.value && match.serviceCharge !== '' && match.serviceCharge != null) scEl.value = match.serviceCharge;
+  recalcInvoiceTotals_();
+}
+
+// Same idea as onClientNameInput_, for the vendor's saved default Commission %.
+function onVendorNameInput_(){
+  const vendorInput = document.getElementById('inv_vendorName');
+  if (!vendorInput) return;
+  const typed = vendorInput.value.trim().toLowerCase();
+  if (!typed) return;
+  const match = window._vendorsList.find(v => v.name.toLowerCase() === typed);
+  if (!match) return;
+
+  const commEl = document.getElementById('inv_commission');
+  if (commEl && !commEl.value && match.commissionPercent !== '' && match.commissionPercent != null) commEl.value = match.commissionPercent;
+  recalcInvoiceTotals_();
 }
 
 function readInvoiceFormFields_(){
@@ -2319,6 +2380,257 @@ async function saveChargeLabelDefaults_(){
     alert('Could not save charge labels.\n\n' + (err.message || err));
   }
 }
+
+/* ---------------------------------------------------------------------
+   CLIENTS & VENDORS TAB — full master data (address, GST, contact info),
+   not just names. Browsing is open to everyone (useful while filling out
+   a DSR entry); adding/editing/deleting is Manager-only, enforced both
+   here (buttons hidden) and server-side (the real boundary).
+   --------------------------------------------------------------------- */
+
+window._cvView = 'clients'; // 'clients' | 'vendors'
+window._cvSearch = '';
+
+async function loadAndRenderClientsVendors(){
+  await loadClientsAndVendors();
+  renderClientsVendorsTab_();
+}
+
+function switchCvView_(view){
+  window._cvView = view;
+  window._cvSearch = '';
+  renderClientsVendorsTab_();
+}
+
+function renderClientsVendorsTab_(){
+  const isManager = currentUser.role === 'Manager';
+  const isClients = window._cvView === 'clients';
+  const search = window._cvSearch.toLowerCase();
+  const toolbar = document.getElementById('cvToolbar');
+  const tableWrap = document.getElementById('cvTableWrap');
+  if (!toolbar || !tableWrap) return;
+
+  toolbar.innerHTML =
+    '<button onclick="switchCvView_(\'clients\')" style="font-weight:' + (isClients?'700':'400') + '">Clients (' + window._clientsList.length + ')</button>' +
+    '<button onclick="switchCvView_(\'vendors\')" style="margin-left:6px;font-weight:' + (!isClients?'700':'400') + '">Vendors (' + window._vendorsList.length + ')</button>' +
+    '<input placeholder="Search..." value="' + escapeHtml(window._cvSearch) + '" oninput="window._cvSearch=this.value;renderClientsVendorsTab_()" style="margin-left:16px;padding:6px;width:200px">' +
+    (isManager ? (
+      '<button onclick="' + (isClients?'openClientDetailModal_(null)':'openVendorDetailModal_(null)') + '" style="margin-left:16px">+ Add ' + (isClients?'Client':'Vendor') + '</button>' +
+      '<button onclick="openBulkImportModal_()" style="margin-left:6px">⬆ Bulk Import</button>'
+    ) : '');
+
+  const rows = (isClients ? window._clientsList : window._vendorsList)
+    .filter(r => !search || r.name.toLowerCase().includes(search));
+
+  const headCols = isClients
+    ? ['Client Name','Sales Person','Service Charge','City','Country','GST Number','Contact Person','Phone']
+    : ['Vendor Name','Commission %','City','Country','GST Number','Contact Person','Phone'];
+
+  const rowHtml = r => {
+    const cells = isClients
+      ? [r.name, r.salesPerson, r.serviceCharge, r.city, r.country, r.gstNumber, r.contactPerson, r.phone]
+      : [r.name, r.commissionPercent, r.city, r.country, r.gstNumber, r.contactPerson, r.phone];
+    const tds = cells.map(v => '<td style="padding:6px 8px;font-size:12px;border-bottom:1px solid #f0f0f0">' + escapeHtml(String(v ?? '')) + '</td>').join('');
+    const actions = isManager
+      ? '<td style="padding:6px 8px;border-bottom:1px solid #f0f0f0;white-space:nowrap">' +
+          '<button onclick="' + (isClients ? 'openClientDetailModal_(\'' + encodeURIComponent(r.name) + '\')' : 'openVendorDetailModal_(\'' + encodeURIComponent(r.name) + '\')') + '" style="padding:3px 8px;font-size:11px">Edit</button> ' +
+          '<button onclick="' + (isClients ? 'deleteClientRow_(\'' + encodeURIComponent(r.name) + '\')' : 'deleteVendorRow_(\'' + encodeURIComponent(r.name) + '\')') + '" style="padding:3px 8px;font-size:11px">Delete</button>' +
+        '</td>'
+      : '';
+    return '<tr>' + tds + actions + '</tr>';
+  };
+
+  tableWrap.innerHTML = rows.length
+    ? '<table style="width:100%;border-collapse:collapse">' +
+        '<thead><tr>' + headCols.map(h => '<th style="text-align:left;padding:6px 8px;font-size:12px;border-bottom:2px solid #eee">' + escapeHtml(h) + '</th>').join('') + (isManager ? '<th style="border-bottom:2px solid #eee"></th>' : '') + '</tr></thead>' +
+        '<tbody>' + rows.map(rowHtml).join('') + '</tbody>' +
+      '</table>'
+    : '<p style="color:#8a93a0;padding:20px;text-align:center">No ' + (isClients?'clients':'vendors') + ' yet' + (isManager ? ' — use "+ Add" or "Bulk Import" above.' : '.') + '</p>';
+}
+
+function cvFieldRow_(labelText, inputHtml){
+  return '<div style="margin-bottom:9px"><label style="display:block;font-size:11px;font-weight:600;color:#3f4750;margin-bottom:2px">' +
+    escapeHtml(labelText) + '</label>' + inputHtml + '</div>';
+}
+
+function openClientDetailModal_(encodedName){
+  const existing = encodedName ? window._clientsList.find(c => c.name === decodeURIComponent(encodedName)) : null;
+  const v = existing || {};
+  const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
+  overlay.innerHTML =
+    '<div style="max-width:520px;margin:24px auto;background:#fff;border-radius:10px;padding:22px;max-height:92vh;overflow:auto">' +
+      '<h2 style="margin-top:0;color:#003366">' + (existing ? 'Edit Client' : 'Add Client') + '</h2>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
+        cvFieldRow_('Client Name', '<input id="cv_name" value="' + escapeHtml(v.name||'') + '" ' + (existing?'readonly style="background:#f2f4f6"':'') + ' style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Default Sales Person', '<input id="cv_salesPerson" value="' + escapeHtml(v.salesPerson||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Default Service Charge', '<input type="number" step="0.01" id="cv_serviceCharge" value="' + escapeHtml(String(v.serviceCharge ?? '')) + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('GST Number', '<input id="cv_gstNumber" value="' + escapeHtml(v.gstNumber||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('PAN Number', '<input id="cv_panNumber" value="' + escapeHtml(v.panNumber||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Contact Person', '<input id="cv_contactPerson" value="' + escapeHtml(v.contactPerson||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Email', '<input id="cv_email" value="' + escapeHtml(v.email||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Phone', '<input id="cv_phone" value="' + escapeHtml(v.phone||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('City', '<input id="cv_city" value="' + escapeHtml(v.city||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('State', '<input id="cv_state" value="' + escapeHtml(v.state||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Country', '<input id="cv_country" value="' + escapeHtml(v.country||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+      '</div>' +
+      cvFieldRow_('Address', '<textarea id="cv_address" rows="2" style="width:100%;padding:6px;box-sizing:border-box">' + escapeHtml(v.address||'') + '</textarea>') +
+      '<div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">' +
+        '<button onclick="closeCvDetailModal_()" style="padding:9px 16px">Cancel</button>' +
+        '<button onclick="saveClientDetail_()" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save</button>' +
+      '</div>' +
+    '</div>';
+  overlay.style.display = 'block';
+}
+
+async function saveClientDetail_(){
+  const val = id => document.getElementById(id).value;
+  const client = {
+    name: val('cv_name'), salesPerson: val('cv_salesPerson'), serviceCharge: val('cv_serviceCharge'),
+    address: val('cv_address'), city: val('cv_city'), state: val('cv_state'), country: val('cv_country'),
+    gstNumber: val('cv_gstNumber'), panNumber: val('cv_panNumber'), contactPerson: val('cv_contactPerson'),
+    email: val('cv_email'), phone: val('cv_phone')
+  };
+  if (!client.name.trim()) { alert('Client name is required.'); return; }
+  try{
+    await apiPost({ action:'saveClient', client:client, actor:currentUser });
+    await loadClientsAndVendors();
+    closeCvDetailModal_();
+    renderClientsVendorsTab_();
+  }catch(err){
+    alert('Could not save client.\n\n' + (err.message || err));
+  }
+}
+
+async function deleteClientRow_(encodedName){
+  const name = decodeURIComponent(encodedName);
+  if (!confirm('Delete client "' + name + '"?')) return;
+  try{
+    await apiPost({ action:'deleteClient', name:name, actor:currentUser });
+    await loadClientsAndVendors();
+    renderClientsVendorsTab_();
+  }catch(err){
+    alert('Could not delete.\n\n' + (err.message || err));
+  }
+}
+
+function openVendorDetailModal_(encodedName){
+  const existing = encodedName ? window._vendorsList.find(v => v.name === decodeURIComponent(encodedName)) : null;
+  const v = existing || {};
+  const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
+  overlay.innerHTML =
+    '<div style="max-width:520px;margin:24px auto;background:#fff;border-radius:10px;padding:22px;max-height:92vh;overflow:auto">' +
+      '<h2 style="margin-top:0;color:#003366">' + (existing ? 'Edit Vendor' : 'Add Vendor') + '</h2>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
+        cvFieldRow_('Vendor Name', '<input id="cv_name" value="' + escapeHtml(v.name||'') + '" ' + (existing?'readonly style="background:#f2f4f6"':'') + ' style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Default Commission %', '<input type="number" step="0.01" id="cv_commissionPercent" value="' + escapeHtml(String(v.commissionPercent ?? '')) + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('GST Number', '<input id="cv_gstNumber" value="' + escapeHtml(v.gstNumber||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('PAN Number', '<input id="cv_panNumber" value="' + escapeHtml(v.panNumber||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Contact Person', '<input id="cv_contactPerson" value="' + escapeHtml(v.contactPerson||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Email', '<input id="cv_email" value="' + escapeHtml(v.email||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Phone', '<input id="cv_phone" value="' + escapeHtml(v.phone||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('City', '<input id="cv_city" value="' + escapeHtml(v.city||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('State', '<input id="cv_state" value="' + escapeHtml(v.state||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Country', '<input id="cv_country" value="' + escapeHtml(v.country||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+      '</div>' +
+      cvFieldRow_('Address', '<textarea id="cv_address" rows="2" style="width:100%;padding:6px;box-sizing:border-box">' + escapeHtml(v.address||'') + '</textarea>') +
+      '<div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">' +
+        '<button onclick="closeCvDetailModal_()" style="padding:9px 16px">Cancel</button>' +
+        '<button onclick="saveVendorDetail_()" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save</button>' +
+      '</div>' +
+    '</div>';
+  overlay.style.display = 'block';
+}
+
+async function saveVendorDetail_(){
+  const val = id => document.getElementById(id).value;
+  const vendor = {
+    name: val('cv_name'), commissionPercent: val('cv_commissionPercent'),
+    address: val('cv_address'), city: val('cv_city'), state: val('cv_state'), country: val('cv_country'),
+    gstNumber: val('cv_gstNumber'), panNumber: val('cv_panNumber'), contactPerson: val('cv_contactPerson'),
+    email: val('cv_email'), phone: val('cv_phone')
+  };
+  if (!vendor.name.trim()) { alert('Vendor name is required.'); return; }
+  try{
+    await apiPost({ action:'saveVendor', vendor:vendor, actor:currentUser });
+    await loadClientsAndVendors();
+    closeCvDetailModal_();
+    renderClientsVendorsTab_();
+  }catch(err){
+    alert('Could not save vendor.\n\n' + (err.message || err));
+  }
+}
+
+async function deleteVendorRow_(encodedName){
+  const name = decodeURIComponent(encodedName);
+  if (!confirm('Delete vendor "' + name + '"?')) return;
+  try{
+    await apiPost({ action:'deleteVendor', name:name, actor:currentUser });
+    await loadClientsAndVendors();
+    renderClientsVendorsTab_();
+  }catch(err){
+    alert('Could not delete.\n\n' + (err.message || err));
+  }
+}
+
+function closeCvDetailModal_(){
+  const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
+  overlay.style.display = 'none';
+  overlay.innerHTML = '';
+}
+
+/* Bulk paste import — still the fast path for loading hundreds at once.
+   Clients: Name, Sales Person, Service Charge, Address, City, State,
+   Country, GST Number, PAN Number, Contact Person, Email, Phone.
+   Vendors: Name, Commission %, Address, City, State, Country, GST
+   Number, PAN Number, Contact Person, Email, Phone.
+   Trailing columns can be omitted per line — only Name is required. */
+function openBulkImportModal_(){
+  const isClients = window._cvView === 'clients';
+  const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
+  const clientCols = 'Name, Sales Person, Service Charge, Address, City, State, Country, GST Number, PAN Number, Contact Person, Email, Phone';
+  const vendorCols = 'Name, Commission %, Address, City, State, Country, GST Number, PAN Number, Contact Person, Email, Phone';
+  overlay.innerHTML =
+    '<div style="max-width:640px;margin:30px auto;background:#fff;border-radius:10px;padding:22px">' +
+      '<h2 style="margin-top:0;color:#003366">Bulk Import ' + (isClients?'Clients':'Vendors') + '</h2>' +
+      '<p style="color:#4a5560;font-size:13px">One row per line, comma or tab separated, in this order (only the name is required — leave the rest blank if you don\'t have it yet):<br><code>' + (isClients?clientCols:vendorCols) + '</code></p>' +
+      '<textarea id="cv_bulk_paste" rows="10" style="width:100%;padding:8px;box-sizing:border-box;font-family:monospace;font-size:12px" placeholder="' + (isClients ? 'Acme Corp, Priya, 500, 12 MG Road, Bangalore, KA, India, 29ABCDE1234F1Z5' : 'Acme Hotels, 10, 12 MG Road, Bangalore, KA, India, 29ABCDE1234F1Z5') + '"></textarea>' +
+      '<div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">' +
+        '<button onclick="closeCvDetailModal_()" style="padding:9px 16px">Cancel</button>' +
+        '<button onclick="submitBulkImport_(\'append\')" style="padding:9px 16px">Add / Update</button>' +
+        '<button onclick="submitBulkImport_(\'replace\')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Replace Entire List</button>' +
+      '</div>' +
+    '</div>';
+  overlay.style.display = 'block';
+}
+
+async function submitBulkImport_(mode){
+  const raw = document.getElementById('cv_bulk_paste').value;
+  const lines = raw.split('\n').map(l => l.trim()).filter(l => l);
+  if (!lines.length) { alert('Paste at least one row first.'); return; }
+  const isClients = window._cvView === 'clients';
+
+  try{
+    if (isClients) {
+      const clients = lines.map(line => {
+        const p = line.split(/\t|,/).map(x => x.trim());
+        return { name:p[0]||'', salesPerson:p[1]||'', serviceCharge:p[2]||'', address:p[3]||'', city:p[4]||'', state:p[5]||'', country:p[6]||'', gstNumber:p[7]||'', panNumber:p[8]||'', contactPerson:p[9]||'', email:p[10]||'', phone:p[11]||'' };
+      }).filter(c => c.name);
+      await apiPost({ action:'importClients', clients:clients, mode:mode, actor:currentUser });
+    } else {
+      const vendors = lines.map(line => {
+        const p = line.split(/\t|,/).map(x => x.trim());
+        return { name:p[0]||'', commissionPercent:p[1]||'', address:p[2]||'', city:p[3]||'', state:p[4]||'', country:p[5]||'', gstNumber:p[6]||'', panNumber:p[7]||'', contactPerson:p[8]||'', email:p[9]||'', phone:p[10]||'' };
+      }).filter(v => v.name);
+      await apiPost({ action:'importVendors', vendors:vendors, mode:mode, actor:currentUser });
+    }
+    await loadClientsAndVendors();
+    closeCvDetailModal_();
+    renderClientsVendorsTab_();
+  }catch(err){
+    alert('Could not import.\n\n' + (err.message || err));
+  }
+}
+
 
 function closeChargeLabelDefaultsModal(){
   const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
