@@ -432,7 +432,7 @@ tr.overdue-row td{border-color:#f3d4c0}
 /* =====================================================================
    CONFIG
    ===================================================================== */
-const API_URL = 'https://script.google.com/macros/s/AKfycbzMo7wV3_4WRAWgpTHQm3171SCc16tZPn2qXv_sjh7etlS2rD4M9x9GDkamwitfTFzJlw/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbwMPN1QM4OGl0YY_E7nC5lbg8wgHuxizMtRrahurVIvSEhzEHQ25Qe_5Ubw5x_v7HyrEw/exec';
 const AUTO_REFRESH_MS = 15000;
 
 const STATUS_FLOW = ['Pending','Waiting for Client Response','Confirmed'];
@@ -2402,9 +2402,15 @@ function switchCvView_(view){
   renderClientsVendorsTab_();
 }
 
+function isFinanceUser_(){
+  return String(currentUser.department || '').trim().toLowerCase() === 'finance';
+}
+
 function renderClientsVendorsTab_(){
-  const isManager = currentUser.role === 'Manager';
   const isClients = window._cvView === 'clients';
+  // Client add/edit/delete is Finance-only; Vendor add/edit/delete is
+  // open to anyone logged in — mirrors the same split enforced server-side.
+  const canEdit = isClients ? isFinanceUser_() : true;
   const search = window._cvSearch.toLowerCase();
   const toolbar = document.getElementById('cvToolbar');
   const tableWrap = document.getElementById('cvTableWrap');
@@ -2414,10 +2420,10 @@ function renderClientsVendorsTab_(){
     '<button onclick="switchCvView_(\'clients\')" style="font-weight:' + (isClients?'700':'400') + '">Clients (' + window._clientsList.length + ')</button>' +
     '<button onclick="switchCvView_(\'vendors\')" style="margin-left:6px;font-weight:' + (!isClients?'700':'400') + '">Vendors (' + window._vendorsList.length + ')</button>' +
     '<input placeholder="Search..." value="' + escapeHtml(window._cvSearch) + '" oninput="window._cvSearch=this.value;renderClientsVendorsTab_()" style="margin-left:16px;padding:6px;width:200px">' +
-    (isManager ? (
+    (canEdit ? (
       '<button onclick="' + (isClients?'openClientDetailModal_(null)':'openVendorDetailModal_(null)') + '" style="margin-left:16px">+ Add ' + (isClients?'Client':'Vendor') + '</button>' +
       '<button onclick="openBulkImportModal_()" style="margin-left:6px">⬆ Bulk Import</button>'
-    ) : '');
+    ) : (isClients ? '<span style="margin-left:16px;color:#8a93a0;font-size:12px">Only Finance can add or edit Clients</span>' : ''));
 
   const rows = (isClients ? window._clientsList : window._vendorsList)
     .filter(r => !search || r.name.toLowerCase().includes(search));
@@ -2431,7 +2437,7 @@ function renderClientsVendorsTab_(){
       ? [r.name, r.salesPerson, r.serviceCharge, r.city, r.country, r.gstNumber, r.contactPerson, r.phone]
       : [r.name, r.commissionPercent, r.city, r.country, r.gstNumber, r.contactPerson, r.phone];
     const tds = cells.map(v => '<td style="padding:6px 8px;font-size:12px;border-bottom:1px solid #f0f0f0">' + escapeHtml(String(v ?? '')) + '</td>').join('');
-    const actions = isManager
+    const actions = canEdit
       ? '<td style="padding:6px 8px;border-bottom:1px solid #f0f0f0;white-space:nowrap">' +
           '<button onclick="' + (isClients ? 'openClientDetailModal_(\'' + encodeURIComponent(r.name) + '\')' : 'openVendorDetailModal_(\'' + encodeURIComponent(r.name) + '\')') + '" style="padding:3px 8px;font-size:11px">Edit</button> ' +
           '<button onclick="' + (isClients ? 'deleteClientRow_(\'' + encodeURIComponent(r.name) + '\')' : 'deleteVendorRow_(\'' + encodeURIComponent(r.name) + '\')') + '" style="padding:3px 8px;font-size:11px">Delete</button>' +
@@ -2442,10 +2448,10 @@ function renderClientsVendorsTab_(){
 
   tableWrap.innerHTML = rows.length
     ? '<table style="width:100%;border-collapse:collapse">' +
-        '<thead><tr>' + headCols.map(h => '<th style="text-align:left;padding:6px 8px;font-size:12px;border-bottom:2px solid #eee">' + escapeHtml(h) + '</th>').join('') + (isManager ? '<th style="border-bottom:2px solid #eee"></th>' : '') + '</tr></thead>' +
+        '<thead><tr>' + headCols.map(h => '<th style="text-align:left;padding:6px 8px;font-size:12px;border-bottom:2px solid #eee">' + escapeHtml(h) + '</th>').join('') + (canEdit ? '<th style="border-bottom:2px solid #eee"></th>' : '') + '</tr></thead>' +
         '<tbody>' + rows.map(rowHtml).join('') + '</tbody>' +
       '</table>'
-    : '<p style="color:#8a93a0;padding:20px;text-align:center">No ' + (isClients?'clients':'vendors') + ' yet' + (isManager ? ' — use "+ Add" or "Bulk Import" above.' : '.') + '</p>';
+    : '<p style="color:#8a93a0;padding:20px;text-align:center">No ' + (isClients?'clients':'vendors') + ' yet' + (canEdit ? ' — use "+ Add" or "Bulk Import" above.' : '.') + '</p>';
 }
 
 function cvFieldRow_(labelText, inputHtml){
