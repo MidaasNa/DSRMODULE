@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <title>Travel Operations Ticketing - LGT Hotel Stays</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js"></script>
 <style>
 :root{
   --navy:#003366;
@@ -2121,11 +2123,17 @@ function renderInvoiceModal_(rowId, rec, existing){
     : window._chargeLabelDefaults.map(label => ({ label: label, amount: '' }));
   window._invoiceChargesDraft = startingCharges.map(c => Object.assign({}, c));
 
+  // Fresh voucher-panel state for this modal session — a new upload
+  // never carries over from whatever was open on the last entry.
+  window._voucherState = { open:false, kind:null, fileName:'', imageDataUrl:null, pdfDoc:null, pageNum:1, numPages:1, extractedText:'', status:'' };
+
   const checkin = v.checkin || (rec && rec.checkin) || '';
   const checkout = v.checkout || (rec && rec.checkout) || '';
 
   overlay.innerHTML =
-    '<div style="max-width:1240px;width:96vw;margin:14px auto;background:#fff;border-radius:10px;padding:18px 22px;max-height:94vh;overflow:auto;font-size:13px">' +
+    '<div style="max-width:1600px;width:97vw;margin:14px auto;background:#fff;border-radius:10px;padding:0;max-height:94vh;font-size:13px;display:flex;align-items:stretch;overflow:hidden">' +
+      '<div id="voucherPanelContainer"></div>' +
+      '<div id="invoiceFormContent" style="flex:1;min-width:0;padding:18px 22px;overflow:auto;max-height:94vh">' +
       '<h2 style="margin:0 0 10px;color:#003366;font-size:20px">' + (existing ? 'DSR Entry ' + escapeHtml(existing.invoiceNumber) : 'New DSR Entry') + '</h2>' +
 
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:0 28px;align-items:start">' +
@@ -2207,10 +2215,11 @@ function renderInvoiceModal_(rowId, rec, existing){
         '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',' + (existing ? '\'' + existing.invoiceNumber + '\'' : 'null') + ')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">' +
           (existing ? 'Save Changes' : 'Create') + '</button>' +
       '</div>' +
-    '</div>';
+    '</div></div>';
 
   overlay.style.display = 'block';
   renderChargesRows_();
+  renderVoucherPanel_();
   recalcInvoiceTotals_();
 }
 
@@ -2322,7 +2331,7 @@ function closeInvoiceModal(){
 }
 
 function printInvoiceByNumber_(invoiceNumber){
-  const content = document.querySelector('#invoiceModalOverlay > div').cloneNode(true);
+  const content = document.getElementById('invoiceFormContent').cloneNode(true);
   content.querySelectorAll('button').forEach(b => b.remove());
   content.querySelectorAll('input,select,textarea').forEach(el => {
     const span = document.createElement('span');
@@ -2336,6 +2345,269 @@ function printInvoiceByNumber_(invoiceNumber){
   w.document.close();
   w.print();
 }
+
+/* ---------------------------------------------------------------------
+   VOUCHER PANEL — left-side panel in the DSR entry modal. Drag/drop (or
+   browse for) the hotel's original voucher — a PDF or a photo/scan — and
+   pull data straight off it instead of retyping:
+
+   - PDF vouchers: pdf.js extracts the REAL text layer instantly and
+     accurately (this is the common case — most hotel confirmations are
+     genuine PDFs, not scans).
+   - Image vouchers (or a scanned/photographed PDF with no text layer):
+     "Run OCR" recognizes text via Tesseract.js, running entirely in the
+     browser — nothing is uploaded anywhere.
+
+   Either way you end up with real, selectable browser text next to the
+   preview. Select any part of it with the mouse, right-click, and a menu
+   of DSR fields appears — clicking one fills that field. Selection only
+   fills fields that are still empty (see fillFieldFromVoucher_), so it
+   never clobbers something you've already typed.
+   --------------------------------------------------------------------- */
+
+if (window.pdfjsLib) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
+// Fields offered in the right-click menu, and which form input each
+// fills. Kept to the fields a voucher would actually mention.
+const VOUCHER_FIELD_TARGETS_ = [
+  ['inv_guestName','Guest Name'], ['inv_hotelName','Hotel Name'], ['inv_confirmationNumber','Confirmation Number'],
+  ['inv_client','Client Name'], ['inv_vendorName','Vendor Name'], ['inv_bookingGivenBy','Booking Given By'],
+  ['inv_city','City'], ['inv_country','Country'], ['inv_roomType','Room Type'],
+  ['inv_checkin','Check In'], ['inv_checkout','Check Out'], ['inv_pricePerNight','Price Per Night'],
+  ['inv_billingInstruction','Billing Instructions'], ['inv_salesPerson','Sales Person Name']
+];
+const VOUCHER_DATE_FIELDS_ = ['inv_checkin', 'inv_checkout'];
+
+function toggleVoucherPanel_(){
+  window._voucherState.open = !window._voucherState.open;
+  refreshVoucherPanel_();
+}
+
+function renderVoucherPanel_(){
+  const container = document.getElementById('voucherPanelContainer');
+  if (!container) return;
+  const s = window._voucherState;
+
+  if (!s.open) {
+    container.style.cssText = 'flex:0 0 auto;border-right:1px solid #eee;padding:10px 6px;display:flex;align-items:flex-start';
+    container.innerHTML = '<button onclick="toggleVoucherPanel_()" title="Attach original voucher" style="writing-mode:vertical-rl;padding:10px 6px;white-space:nowrap">📎 Attach Voucher</button>';
+    return;
+  }
+
+  container.style.cssText = 'flex:0 0 300px;border-right:1px solid #eee;padding:14px;overflow:auto;max-height:94vh;background:#fafbfc';
+
+  let body;
+  if (!s.kind) {
+    body =
+      '<div id="voucherDropZone" ondragover="event.preventDefault();this.style.background=\'#eef2f7\'" ondragleave="this.style.background=\'\'" ondrop="onVoucherDrop_(event)" ' +
+        'onclick="document.getElementById(\'voucherFileInput\').click()" ' +
+        'style="border:2px dashed #ccd3da;border-radius:8px;padding:28px 10px;text-align:center;color:#8a93a0;cursor:pointer;font-size:12px">' +
+        'Drag &amp; drop the voucher here<br>(PDF or image)<br><br>or click to browse' +
+      '</div>' +
+      '<input type="file" id="voucherFileInput" accept="application/pdf,image/*" style="display:none" onchange="onVoucherFileInput_(event)">';
+  } else {
+    body =
+      '<div style="font-size:11px;color:#4a5560;margin-bottom:6px;word-break:break-all">' + escapeHtml(s.fileName) + '</div>' +
+      (s.kind === 'image'
+        ? '<img src="' + s.imageDataUrl + '" style="width:100%;border:1px solid #eee;border-radius:4px">'
+        : '<canvas id="voucherCanvas" style="width:100%;border:1px solid #eee;border-radius:4px"></canvas>' +
+          (s.numPages > 1 ? '<div style="margin-top:4px;font-size:11px">Page ' + s.pageNum + ' of ' + s.numPages +
+            ' <button onclick="changeVoucherPage_(-1)" style="padding:2px 8px">‹</button> <button onclick="changeVoucherPage_(1)" style="padding:2px 8px">›</button></div>' : '')
+      ) +
+      '<div style="margin-top:8px;display:flex;gap:6px">' +
+        '<button onclick="runVoucherOcr_()" style="padding:5px 10px;font-size:12px">🔍 Run OCR</button>' +
+        '<button onclick="clearVoucher_()" style="padding:5px 10px;font-size:12px">✕ Remove</button>' +
+      '</div>' +
+      (s.status ? '<div style="margin-top:6px;font-size:11px;color:#8a93a0">' + escapeHtml(s.status) + '</div>' : '') +
+      (s.extractedText
+        ? '<div style="margin-top:10px;font-size:11px;font-weight:600;color:#3f4750">Extracted text — select some, then right-click:</div>' +
+          '<div id="voucherTextBlock" oncontextmenu="onVoucherTextContextMenu_(event)" style="margin-top:4px;padding:8px;background:#fff;border:1px solid #eee;border-radius:4px;font-size:11px;white-space:pre-wrap;max-height:260px;overflow:auto;user-select:text;cursor:text">' + escapeHtml(s.extractedText) + '</div>'
+        : '');
+  }
+
+  container.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<b style="color:#003366;font-size:13px">📎 Voucher</b>' +
+      '<button onclick="toggleVoucherPanel_()" style="padding:2px 8px;font-size:12px">✕</button>' +
+    '</div>' + body;
+}
+
+/* renderVoucherPanel_ rebuilds the panel's innerHTML from scratch every
+   time — including a brand-new, blank <canvas> element whenever a PDF is
+   loaded. That means anything already drawn into the OLD canvas is lost
+   the instant the panel re-renders. This wrapper is what every state
+   change in this module should call instead of renderVoucherPanel_
+   directly: it re-renders, then immediately redraws the current PDF
+   page into the fresh canvas so the preview never goes blank. */
+async function refreshVoucherPanel_(){
+  renderVoucherPanel_();
+  const s = window._voucherState;
+  if (s.kind === 'pdf' && s.pdfDoc) {
+    await drawVoucherPdfPageIntoCanvas_();
+  }
+}
+
+function onVoucherDrop_(ev){
+  ev.preventDefault();
+  ev.currentTarget.style.background = '';
+  const file = ev.dataTransfer.files && ev.dataTransfer.files[0];
+  if (file) handleVoucherFile_(file);
+}
+function onVoucherFileInput_(ev){
+  const file = ev.target.files && ev.target.files[0];
+  if (file) handleVoucherFile_(file);
+}
+
+async function handleVoucherFile_(file){
+  const s = window._voucherState;
+  s.fileName = file.name;
+  s.extractedText = '';
+  s.status = '';
+
+  if (file.type === 'application/pdf') {
+    s.kind = 'pdf';
+    s.status = 'Loading PDF…';
+    renderVoucherPanel_(); // no pdfDoc yet — nothing to draw, plain render is fine
+    try{
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      s.pdfDoc = pdf;
+      s.numPages = pdf.numPages;
+      s.pageNum = 1;
+      await refreshVoucherPanel_(); // now draws the first page
+      await extractVoucherPdfText_();
+    }catch(err){
+      s.status = 'Could not load this PDF: ' + (err.message || err);
+      renderVoucherPanel_();
+    }
+  } else if (file.type.startsWith('image/')) {
+    s.kind = 'image';
+    const reader = new FileReader();
+    reader.onload = () => {
+      s.imageDataUrl = reader.result;
+      s.status = 'Click "Run OCR" to extract text from this image.';
+      renderVoucherPanel_();
+    };
+    reader.readAsDataURL(file);
+  } else {
+    alert('Please attach a PDF or an image file.');
+  }
+}
+
+/* Pure drawing — assumes #voucherCanvas already exists in the DOM (i.e.
+   renderVoucherPanel_ has already run for the current s.kind==='pdf'
+   state). Never calls renderVoucherPanel_ itself, so it's safe to call
+   after a render without re-triggering another wipe. */
+async function drawVoucherPdfPageIntoCanvas_(){
+  const s = window._voucherState;
+  const canvas = document.getElementById('voucherCanvas');
+  if (!canvas) return;
+  const page = await s.pdfDoc.getPage(s.pageNum);
+  const viewport = page.getViewport({ scale: 1.5 });
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+}
+
+async function extractVoucherPdfText_(){
+  const s = window._voucherState;
+  const page = await s.pdfDoc.getPage(s.pageNum);
+  const textContent = await page.getTextContent();
+  const text = textContent.items.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim();
+  s.extractedText = text;
+  s.status = text ? '' : 'No text found on this page — it may be a scanned image. Try "Run OCR".';
+  await refreshVoucherPanel_();
+}
+
+async function changeVoucherPage_(delta){
+  const s = window._voucherState;
+  const next = s.pageNum + delta;
+  if (next < 1 || next > s.numPages) return;
+  s.pageNum = next;
+  s.extractedText = '';
+  await refreshVoucherPanel_();
+  await extractVoucherPdfText_();
+}
+
+async function runVoucherOcr_(){
+  const s = window._voucherState;
+  if (typeof Tesseract === 'undefined') { alert('OCR library failed to load — check your internet connection.'); return; }
+  // capture the OCR source BEFORE re-rendering the status line, since a
+  // PDF's canvas would otherwise get wiped blank by that re-render
+  const source = s.kind === 'image' ? s.imageDataUrl : document.getElementById('voucherCanvas');
+  s.status = 'Running OCR… this can take a few seconds.';
+  await refreshVoucherPanel_();
+  try{
+    const result = await Tesseract.recognize(source, 'eng');
+    s.extractedText = (result.data.text || '').trim();
+    s.status = s.extractedText ? '' : 'OCR found no readable text.';
+  }catch(err){
+    s.status = 'OCR failed: ' + (err.message || err);
+  }
+  await refreshVoucherPanel_();
+}
+
+function clearVoucher_(){
+  window._voucherState = Object.assign({}, window._voucherState, { kind:null, fileName:'', imageDataUrl:null, pdfDoc:null, pageNum:1, numPages:1, extractedText:'', status:'' });
+  renderVoucherPanel_();
+}
+
+/* Right-click on a text selection inside the extracted-text block shows
+   a small menu of DSR fields; picking one fills that field with
+   whatever was selected. */
+function onVoucherTextContextMenu_(ev){
+  const selected = window.getSelection().toString().trim();
+  if (!selected) return; // nothing selected — let the normal browser menu show
+  ev.preventDefault();
+
+  const existingMenu = document.getElementById('voucherFieldMenu');
+  if (existingMenu) existingMenu.remove();
+
+  const menu = document.createElement('div');
+  menu.id = 'voucherFieldMenu';
+  menu.style.cssText = 'position:fixed;top:' + ev.clientY + 'px;left:' + ev.clientX + 'px;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.2);z-index:2000;padding:4px 0;min-width:180px;font-size:12px';
+  menu.innerHTML =
+    '<div style="padding:6px 12px;color:#8a93a0;border-bottom:1px solid #eee">Fill which field?</div>' +
+    VOUCHER_FIELD_TARGETS_.map(([id,label]) =>
+      '<div onclick="fillFieldFromVoucher_(\'' + id + '\',' + JSON.stringify(selected) + ')" style="padding:7px 12px;cursor:pointer" onmouseover="this.style.background=\'#f2f4f6\'" onmouseout="this.style.background=\'\'">' + escapeHtml(label) + '</div>'
+    ).join('');
+  document.body.appendChild(menu);
+
+  const closeMenu = () => { const m = document.getElementById('voucherFieldMenu'); if (m) m.remove(); document.removeEventListener('click', closeMenu); };
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
+
+/* Only fills fields that are currently empty — a selection from the
+   voucher should never silently overwrite something already typed. Date
+   fields get a best-effort parse into yyyy-MM-dd (what <input type=date>
+   requires); if that fails, the field is left alone and the person is
+   told to type it manually. */
+function fillFieldFromVoucher_(fieldId, text){
+  const el = document.getElementById(fieldId);
+  const menu = document.getElementById('voucherFieldMenu');
+  if (menu) menu.remove();
+  if (!el) return;
+  if (el.value) { alert('That field already has a value — clear it first if you want to replace it from the voucher.'); return; }
+
+  if (VOUCHER_DATE_FIELDS_.includes(fieldId)) {
+    const parsed = new Date(text);
+    if (isNaN(parsed.getTime())) {
+      alert('Couldn\'t read "' + text + '" as a date — please enter it manually.');
+      return;
+    }
+    el.value = parsed.toISOString().split('T')[0];
+  } else {
+    el.value = text;
+  }
+  el.style.background = '#eaf3ea';
+  setTimeout(() => { el.style.background = ''; }, 1200);
+  if (fieldId === 'inv_client') onClientNameInput_();
+  if (fieldId === 'inv_vendorName') onVendorNameInput_();
+  recalcInvoiceTotals_();
+}
+
 
 /* ---------------------------------------------------------------------
    CHARGE LABEL DEFAULTS (admin) — pre-populates new entries' Custom
