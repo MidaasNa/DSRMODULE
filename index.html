@@ -2382,7 +2382,7 @@ const VOUCHER_DATE_FIELDS_ = ['inv_checkin', 'inv_checkout'];
 
 function toggleVoucherPanel_(){
   window._voucherState.open = !window._voucherState.open;
-  refreshVoucherPanel_();
+  renderVoucherPanel_();
 }
 
 function renderVoucherPanel_(){
@@ -2408,22 +2408,23 @@ function renderVoucherPanel_(){
       '</div>' +
       '<input type="file" id="voucherFileInput" accept="application/pdf,image/*" style="display:none" onchange="onVoucherFileInput_(event)">';
   } else {
+    // No visual preview here on purpose — it can't be edited, so it was
+    // just taking up space. This panel is only ever about the extracted
+    // TEXT, which is what actually feeds the DSR fields.
     body =
       '<div style="font-size:11px;color:#4a5560;margin-bottom:6px;word-break:break-all">' + escapeHtml(s.fileName) + '</div>' +
-      (s.kind === 'image'
-        ? '<img src="' + s.imageDataUrl + '" style="width:100%;border:1px solid #eee;border-radius:4px">'
-        : '<canvas id="voucherCanvas" style="width:100%;border:1px solid #eee;border-radius:4px"></canvas>' +
-          (s.numPages > 1 ? '<div style="margin-top:4px;font-size:11px">Page ' + s.pageNum + ' of ' + s.numPages +
-            ' <button onclick="changeVoucherPage_(-1)" style="padding:2px 8px">‹</button> <button onclick="changeVoucherPage_(1)" style="padding:2px 8px">›</button></div>' : '')
-      ) +
-      '<div style="margin-top:8px;display:flex;gap:6px">' +
+      (s.kind === 'pdf' && s.numPages > 1
+        ? '<div style="font-size:11px;margin-bottom:6px">Page ' + s.pageNum + ' of ' + s.numPages +
+          ' <button onclick="changeVoucherPage_(-1)" style="padding:2px 8px">‹</button> <button onclick="changeVoucherPage_(1)" style="padding:2px 8px">›</button></div>'
+        : '') +
+      '<div style="display:flex;gap:6px">' +
         '<button onclick="runVoucherOcr_()" style="padding:5px 10px;font-size:12px">🔍 Run OCR</button>' +
         '<button onclick="clearVoucher_()" style="padding:5px 10px;font-size:12px">✕ Remove</button>' +
       '</div>' +
       (s.status ? '<div style="margin-top:6px;font-size:11px;color:#8a93a0">' + escapeHtml(s.status) + '</div>' : '') +
-      (s.extractedText
+      (s.extractedText || s.kind
         ? '<div style="margin-top:10px;font-size:11px;font-weight:600;color:#3f4750">Extracted text — edit if needed, select some, then right-click:</div>' +
-          '<textarea id="voucherTextBlock" oncontextmenu="onVoucherTextContextMenu_(event)" oninput="window._voucherState.extractedText=this.value" spellcheck="false" style="margin-top:4px;width:100%;box-sizing:border-box;padding:8px;background:#fff;border:1px solid #eee;border-radius:4px;font-size:11px;font-family:inherit;line-height:1.5;height:260px;resize:vertical">' + escapeHtml(s.extractedText) + '</textarea>'
+          '<textarea id="voucherTextBlock" oncontextmenu="onVoucherTextContextMenu_(event)" oninput="window._voucherState.extractedText=this.value" spellcheck="false" style="margin-top:4px;width:100%;box-sizing:border-box;padding:8px;background:#fff;border:1px solid #eee;border-radius:4px;font-size:11px;font-family:inherit;line-height:1.5;height:320px;resize:vertical">' + escapeHtml(s.extractedText) + '</textarea>'
         : '');
   }
 
@@ -2432,21 +2433,6 @@ function renderVoucherPanel_(){
       '<b style="color:#003366;font-size:13px">📎 Voucher</b>' +
       '<button onclick="toggleVoucherPanel_()" style="padding:2px 8px;font-size:12px">✕</button>' +
     '</div>' + body;
-}
-
-/* renderVoucherPanel_ rebuilds the panel's innerHTML from scratch every
-   time — including a brand-new, blank <canvas> element whenever a PDF is
-   loaded. That means anything already drawn into the OLD canvas is lost
-   the instant the panel re-renders. This wrapper is what every state
-   change in this module should call instead of renderVoucherPanel_
-   directly: it re-renders, then immediately redraws the current PDF
-   page into the fresh canvas so the preview never goes blank. */
-async function refreshVoucherPanel_(){
-  renderVoucherPanel_();
-  const s = window._voucherState;
-  if (s.kind === 'pdf' && s.pdfDoc) {
-    await drawVoucherPdfPageIntoCanvas_();
-  }
 }
 
 function onVoucherDrop_(ev){
@@ -2469,14 +2455,13 @@ async function handleVoucherFile_(file){
   if (file.type === 'application/pdf') {
     s.kind = 'pdf';
     s.status = 'Loading PDF…';
-    renderVoucherPanel_(); // no pdfDoc yet — nothing to draw, plain render is fine
+    renderVoucherPanel_();
     try{
       const buf = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
       s.pdfDoc = pdf;
       s.numPages = pdf.numPages;
       s.pageNum = 1;
-      await refreshVoucherPanel_(); // now draws the first page
       await extractVoucherPdfText_();
     }catch(err){
       s.status = 'Could not load this PDF: ' + (err.message || err);
@@ -2494,21 +2479,6 @@ async function handleVoucherFile_(file){
   } else {
     alert('Please attach a PDF or an image file.');
   }
-}
-
-/* Pure drawing — assumes #voucherCanvas already exists in the DOM (i.e.
-   renderVoucherPanel_ has already run for the current s.kind==='pdf'
-   state). Never calls renderVoucherPanel_ itself, so it's safe to call
-   after a render without re-triggering another wipe. */
-async function drawVoucherPdfPageIntoCanvas_(){
-  const s = window._voucherState;
-  const canvas = document.getElementById('voucherCanvas');
-  if (!canvas) return;
-  const page = await s.pdfDoc.getPage(s.pageNum);
-  const viewport = page.getViewport({ scale: 1.5 });
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-  await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
 }
 
 /* pdf.js hands back text as a flat list of positioned fragments — joining
@@ -2543,7 +2513,7 @@ async function extractVoucherPdfText_(){
   const text = pdfTextContentToLines_(textContent);
   s.extractedText = text;
   s.status = text ? '' : 'No text found on this page — it may be a scanned image. Try "Run OCR".';
-  await refreshVoucherPanel_();
+  renderVoucherPanel_();
 }
 
 async function changeVoucherPage_(delta){
@@ -2552,26 +2522,39 @@ async function changeVoucherPage_(delta){
   if (next < 1 || next > s.numPages) return;
   s.pageNum = next;
   s.extractedText = '';
-  await refreshVoucherPanel_();
   await extractVoucherPdfText_();
+}
+
+/* Renders a PDF page to an off-screen (never displayed) canvas purely so
+   OCR has pixel data to read — only needed as a fallback when a PDF page
+   has no real text layer (i.e. it's actually a scan). Created fresh each
+   time rather than kept around, since there's no visible preview to keep
+   in sync with anymore. */
+async function renderVoucherPageOffscreen_(){
+  const s = window._voucherState;
+  const page = await s.pdfDoc.getPage(s.pageNum);
+  const viewport = page.getViewport({ scale: 2 });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+  return canvas;
 }
 
 async function runVoucherOcr_(){
   const s = window._voucherState;
   if (typeof Tesseract === 'undefined') { alert('OCR library failed to load — check your internet connection.'); return; }
-  // capture the OCR source BEFORE re-rendering the status line, since a
-  // PDF's canvas would otherwise get wiped blank by that re-render
-  const source = s.kind === 'image' ? s.imageDataUrl : document.getElementById('voucherCanvas');
   s.status = 'Running OCR… this can take a few seconds.';
-  await refreshVoucherPanel_();
+  renderVoucherPanel_();
   try{
+    const source = s.kind === 'image' ? s.imageDataUrl : await renderVoucherPageOffscreen_();
     const result = await Tesseract.recognize(source, 'eng');
     s.extractedText = (result.data.text || '').trim();
     s.status = s.extractedText ? '' : 'OCR found no readable text.';
   }catch(err){
     s.status = 'OCR failed: ' + (err.message || err);
   }
-  await refreshVoucherPanel_();
+  renderVoucherPanel_();
 }
 
 function clearVoucher_(){
@@ -2579,9 +2562,23 @@ function clearVoucher_(){
   renderVoucherPanel_();
 }
 
+// Holds whatever text was highlighted the moment the right-click menu was
+// opened. Deliberately NOT passed through the menu items' onclick HTML —
+// see the note below on why that broke.
+window._voucherSelectedText = '';
+
 /* Right-click on a text selection inside the extracted-text block shows
    a small menu of DSR fields; picking one fills that field with
-   whatever was selected. */
+   whatever was selected.
+
+   The selected text is stashed in window._voucherSelectedText rather
+   than being written into each menu item's onclick="..." attribute. It
+   used to be embedded there via JSON.stringify(selected) — but that
+   wraps the text in double quotes, and the onclick attribute itself is
+   ALSO delimited by double quotes, so any real voucher text broke the
+   attribute the instant it appeared (which is every time — that's why
+   filling never actually worked). Keeping the text out of the HTML
+   entirely sidesteps that regardless of what characters show up in it. */
 function onVoucherTextContextMenu_(ev){
   // textareas don't use window.getSelection() for their own content —
   // the selected range lives on the element itself.
@@ -2589,6 +2586,7 @@ function onVoucherTextContextMenu_(ev){
   const selected = el.value.substring(el.selectionStart, el.selectionEnd).trim();
   if (!selected) return; // nothing selected — let the normal browser menu show
   ev.preventDefault();
+  window._voucherSelectedText = selected;
 
   const existingMenu = document.getElementById('voucherFieldMenu');
   if (existingMenu) existingMenu.remove();
@@ -2599,7 +2597,7 @@ function onVoucherTextContextMenu_(ev){
   menu.innerHTML =
     '<div style="padding:6px 12px;color:#8a93a0;border-bottom:1px solid #eee">Fill which field?</div>' +
     VOUCHER_FIELD_TARGETS_.map(([id,label]) =>
-      '<div onclick="fillFieldFromVoucher_(\'' + id + '\',' + JSON.stringify(selected) + ')" style="padding:7px 12px;cursor:pointer" onmouseover="this.style.background=\'#f2f4f6\'" onmouseout="this.style.background=\'\'">' + escapeHtml(label) + '</div>'
+      '<div onclick="fillFieldFromVoucher_(\'' + id + '\')" style="padding:7px 12px;cursor:pointer" onmouseover="this.style.background=\'#f2f4f6\'" onmouseout="this.style.background=\'\'">' + escapeHtml(label) + '</div>'
     ).join('');
   document.body.appendChild(menu);
 
@@ -2612,11 +2610,12 @@ function onVoucherTextContextMenu_(ev){
    fields get a best-effort parse into yyyy-MM-dd (what <input type=date>
    requires); if that fails, the field is left alone and the person is
    told to type it manually. */
-function fillFieldFromVoucher_(fieldId, text){
+function fillFieldFromVoucher_(fieldId){
+  const text = window._voucherSelectedText;
   const el = document.getElementById(fieldId);
   const menu = document.getElementById('voucherFieldMenu');
   if (menu) menu.remove();
-  if (!el) return;
+  if (!el || !text) return;
   if (el.value) { alert('That field already has a value — clear it first if you want to replace it from the voucher.'); return; }
 
   if (VOUCHER_DATE_FIELDS_.includes(fieldId)) {
