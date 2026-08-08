@@ -2422,8 +2422,8 @@ function renderVoucherPanel_(){
       '</div>' +
       (s.status ? '<div style="margin-top:6px;font-size:11px;color:#8a93a0">' + escapeHtml(s.status) + '</div>' : '') +
       (s.extractedText
-        ? '<div style="margin-top:10px;font-size:11px;font-weight:600;color:#3f4750">Extracted text — select some, then right-click:</div>' +
-          '<div id="voucherTextBlock" oncontextmenu="onVoucherTextContextMenu_(event)" style="margin-top:4px;padding:8px;background:#fff;border:1px solid #eee;border-radius:4px;font-size:11px;white-space:pre-wrap;max-height:260px;overflow:auto;user-select:text;cursor:text">' + escapeHtml(s.extractedText) + '</div>'
+        ? '<div style="margin-top:10px;font-size:11px;font-weight:600;color:#3f4750">Extracted text — edit if needed, select some, then right-click:</div>' +
+          '<textarea id="voucherTextBlock" oncontextmenu="onVoucherTextContextMenu_(event)" oninput="window._voucherState.extractedText=this.value" spellcheck="false" style="margin-top:4px;width:100%;box-sizing:border-box;padding:8px;background:#fff;border:1px solid #eee;border-radius:4px;font-size:11px;font-family:inherit;line-height:1.5;height:260px;resize:vertical">' + escapeHtml(s.extractedText) + '</textarea>'
         : '');
   }
 
@@ -2511,11 +2511,36 @@ async function drawVoucherPdfPageIntoCanvas_(){
   await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
 }
 
+/* pdf.js hands back text as a flat list of positioned fragments — joining
+   them with plain spaces (the old approach) throws away the document's
+   actual line structure and produces one unreadable run-on paragraph.
+   This instead tracks each fragment's vertical position (transform[5])
+   and starts a new line whenever it jumps meaningfully from the previous
+   one, so the extracted text roughly mirrors how the voucher actually
+   reads on the page. */
+function pdfTextContentToLines_(textContent){
+  let lines = [];
+  let currentLine = '';
+  let lastY = null;
+  textContent.items.forEach(item => {
+    if (!item.str) return;
+    const y = item.transform[5];
+    if (lastY !== null && Math.abs(y - lastY) > 3) {
+      lines.push(currentLine.trim());
+      currentLine = '';
+    }
+    currentLine += (currentLine && !currentLine.endsWith(' ') ? ' ' : '') + item.str;
+    lastY = y;
+  });
+  if (currentLine.trim()) lines.push(currentLine.trim());
+  return lines.filter(l => l).join('\n');
+}
+
 async function extractVoucherPdfText_(){
   const s = window._voucherState;
   const page = await s.pdfDoc.getPage(s.pageNum);
   const textContent = await page.getTextContent();
-  const text = textContent.items.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim();
+  const text = pdfTextContentToLines_(textContent);
   s.extractedText = text;
   s.status = text ? '' : 'No text found on this page — it may be a scanned image. Try "Run OCR".';
   await refreshVoucherPanel_();
@@ -2558,7 +2583,10 @@ function clearVoucher_(){
    a small menu of DSR fields; picking one fills that field with
    whatever was selected. */
 function onVoucherTextContextMenu_(ev){
-  const selected = window.getSelection().toString().trim();
+  // textareas don't use window.getSelection() for their own content —
+  // the selected range lives on the element itself.
+  const el = ev.currentTarget;
+  const selected = el.value.substring(el.selectionStart, el.selectionEnd).trim();
   if (!selected) return; // nothing selected — let the normal browser menu show
   ev.preventDefault();
 
