@@ -2136,7 +2136,7 @@ function renderInvoiceModal_(rowId, rec, existing){
       '<div id="invoiceFormContent" style="flex:1;min-width:0;padding:18px 22px;overflow:auto;max-height:94vh">' +
       '<h2 style="margin:0 0 10px;color:#003366;font-size:20px">' + (existing ? 'DSR Entry ' + escapeHtml(existing.invoiceNumber) : 'New DSR Entry') + '</h2>' +
 
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:0 28px;align-items:start">' +
+      '<div style="display:grid;grid-template-columns:1fr;gap:0;align-items:start;max-width:640px">' +
 
         '<div>' +
           invoiceSectionHeader_('1. Billing Information') +
@@ -2395,7 +2395,7 @@ const VOUCHER_FIELD_TARGETS_ = [
   ['inv_billingInstruction','Billing Instructions'], ['inv_salesPerson','Sales Person Name']
 ];
 const VOUCHER_DATE_FIELDS_ = ['inv_checkin', 'inv_checkout'];
-const VOUCHER_PREVIEW_WIDTH_ = 268; // px — fits the 300px-wide panel with padding
+const VOUCHER_PREVIEW_WIDTH_ = 420; // px — widened now the form is single-column and has room to give
 
 function toggleVoucherPanel_(){
   window._voucherState.open = !window._voucherState.open;
@@ -2413,7 +2413,7 @@ function renderVoucherPanel_(){
     return;
   }
 
-  container.style.cssText = 'flex:0 0 300px;border-right:1px solid #eee;padding:14px;overflow:auto;max-height:94vh;background:#fafbfc';
+  container.style.cssText = 'flex:0 0 452px;border-right:1px solid #eee;padding:14px;overflow:auto;max-height:94vh;background:#fafbfc';
 
   let body;
   if (!s.kind) {
