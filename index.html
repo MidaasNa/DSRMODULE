@@ -2349,20 +2349,36 @@ function printInvoiceByNumber_(invoiceNumber){
 /* ---------------------------------------------------------------------
    VOUCHER PANEL — left-side panel in the DSR entry modal. Drag/drop (or
    browse for) the hotel's original voucher — a PDF or a photo/scan — and
-   pull data straight off it instead of retyping:
+   pull data straight off it instead of retyping.
+
+   True in-place editing of a PDF's actual content isn't something a
+   browser tool can do reliably — PDFs store text as positioned glyphs
+   tied to embedded fonts, not reflowable content, and reconstructing
+   that is what dedicated software like Acrobat does with a lot of
+   engineering behind it. What THIS does instead: show the real page,
+   and overlay small, individually editable text boxes positioned right
+   on top of where each piece of text actually sits — close enough to
+   "edit the document" for the purpose of fixing a misread value and
+   filling a DSR field from it, without pretending to touch the real PDF.
 
    - PDF vouchers: pdf.js extracts the REAL text layer instantly and
-     accurately (this is the common case — most hotel confirmations are
-     genuine PDFs, not scans).
+     accurately (the common case — most hotel confirmations are genuine
+     PDFs, not scans), and each fragment becomes its own positioned,
+     editable, right-clickable box on the rendered page.
    - Image vouchers (or a scanned/photographed PDF with no text layer):
-     "Run OCR" recognizes text via Tesseract.js, running entirely in the
-     browser — nothing is uploaded anywhere.
+     "Run OCR" recognizes text via Tesseract.js — entirely in the
+     browser, nothing uploaded anywhere — including each word's position,
+     so the same positioned-overlay editing works there too.
 
-   Either way you end up with real, selectable browser text next to the
-   preview. Select any part of it with the mouse, right-click, and a menu
-   of DSR fields appears — clicking one fills that field. Selection only
-   fills fields that are still empty (see fillFieldFromVoucher_), so it
-   never clobbers something you've already typed.
+   Below the preview there's also a plain text box with everything
+   extracted in reading order — useful for grabbing a phrase that spans
+   several fragments, which right-clicking one small overlay box can't
+   do on its own.
+
+   Either way, right-click any selection (in the overlay OR the text
+   box) to get a menu of DSR fields — picking one fills that field, but
+   only if it's still empty (see fillFieldFromVoucher_), so a voucher
+   selection never silently overwrites something already typed.
    --------------------------------------------------------------------- */
 
 if (window.pdfjsLib) {
@@ -2379,6 +2395,7 @@ const VOUCHER_FIELD_TARGETS_ = [
   ['inv_billingInstruction','Billing Instructions'], ['inv_salesPerson','Sales Person Name']
 ];
 const VOUCHER_DATE_FIELDS_ = ['inv_checkin', 'inv_checkout'];
+const VOUCHER_PREVIEW_WIDTH_ = 268; // px — fits the 300px-wide panel with padding
 
 function toggleVoucherPanel_(){
   window._voucherState.open = !window._voucherState.open;
@@ -2408,23 +2425,27 @@ function renderVoucherPanel_(){
       '</div>' +
       '<input type="file" id="voucherFileInput" accept="application/pdf,image/*" style="display:none" onchange="onVoucherFileInput_(event)">';
   } else {
-    // No visual preview here on purpose — it can't be edited, so it was
-    // just taking up space. This panel is only ever about the extracted
-    // TEXT, which is what actually feeds the DSR fields.
     body =
       '<div style="font-size:11px;color:#4a5560;margin-bottom:6px;word-break:break-all">' + escapeHtml(s.fileName) + '</div>' +
       (s.kind === 'pdf' && s.numPages > 1
         ? '<div style="font-size:11px;margin-bottom:6px">Page ' + s.pageNum + ' of ' + s.numPages +
           ' <button onclick="changeVoucherPage_(-1)" style="padding:2px 8px">‹</button> <button onclick="changeVoucherPage_(1)" style="padding:2px 8px">›</button></div>'
         : '') +
-      '<div style="display:flex;gap:6px">' +
+      '<div style="position:relative;display:inline-block;max-width:100%">' +
+        (s.kind === 'image'
+          ? '<img id="voucherImg" style="display:block;width:' + VOUCHER_PREVIEW_WIDTH_ + 'px;border:1px solid #eee;border-radius:4px">'
+          : '<canvas id="voucherCanvas" style="display:block;border:1px solid #eee;border-radius:4px"></canvas>') +
+        '<div id="voucherOverlay" style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none"></div>' +
+      '</div>' +
+      '<div style="font-size:10px;color:#8a93a0;margin-top:3px">Click a highlighted box on the document to edit it directly; right-click to fill a field.</div>' +
+      '<div style="margin-top:8px;display:flex;gap:6px">' +
         '<button onclick="runVoucherOcr_()" style="padding:5px 10px;font-size:12px">🔍 Run OCR</button>' +
         '<button onclick="clearVoucher_()" style="padding:5px 10px;font-size:12px">✕ Remove</button>' +
       '</div>' +
       (s.status ? '<div style="margin-top:6px;font-size:11px;color:#8a93a0">' + escapeHtml(s.status) + '</div>' : '') +
-      (s.extractedText || s.kind
-        ? '<div style="margin-top:10px;font-size:11px;font-weight:600;color:#3f4750">Extracted text — edit if needed, select some, then right-click:</div>' +
-          '<textarea id="voucherTextBlock" oncontextmenu="onVoucherTextContextMenu_(event)" oninput="window._voucherState.extractedText=this.value" spellcheck="false" style="margin-top:4px;width:100%;box-sizing:border-box;padding:8px;background:#fff;border:1px solid #eee;border-radius:4px;font-size:11px;font-family:inherit;line-height:1.5;height:320px;resize:vertical">' + escapeHtml(s.extractedText) + '</textarea>'
+      (s.extractedText
+        ? '<div style="margin-top:10px;font-size:11px;font-weight:600;color:#3f4750">Full text (for selections spanning several boxes above):</div>' +
+          '<textarea id="voucherTextBlock" oncontextmenu="onVoucherTextContextMenu_(event)" oninput="window._voucherState.extractedText=this.value" spellcheck="false" style="margin-top:4px;width:100%;box-sizing:border-box;padding:8px;background:#fff;border:1px solid #eee;border-radius:4px;font-size:11px;font-family:inherit;line-height:1.5;height:160px;resize:vertical">' + escapeHtml(s.extractedText) + '</textarea>'
         : '');
   }
 
@@ -2462,7 +2483,7 @@ async function handleVoucherFile_(file){
       s.pdfDoc = pdf;
       s.numPages = pdf.numPages;
       s.pageNum = 1;
-      await extractVoucherPdfText_();
+      await redrawCurrentPdfPage_();
     }catch(err){
       s.status = 'Could not load this PDF: ' + (err.message || err);
       renderVoucherPanel_();
@@ -2472,8 +2493,10 @@ async function handleVoucherFile_(file){
     const reader = new FileReader();
     reader.onload = () => {
       s.imageDataUrl = reader.result;
-      s.status = 'Click "Run OCR" to extract text from this image.';
+      s.status = 'Click "Run OCR" to recognize and position text on this image.';
       renderVoucherPanel_();
+      const img = document.getElementById('voucherImg');
+      if (img) img.src = s.imageDataUrl;
     };
     reader.readAsDataURL(file);
   } else {
@@ -2482,12 +2505,10 @@ async function handleVoucherFile_(file){
 }
 
 /* pdf.js hands back text as a flat list of positioned fragments — joining
-   them with plain spaces (the old approach) throws away the document's
-   actual line structure and produces one unreadable run-on paragraph.
-   This instead tracks each fragment's vertical position (transform[5])
-   and starts a new line whenever it jumps meaningfully from the previous
-   one, so the extracted text roughly mirrors how the voucher actually
-   reads on the page. */
+   them with plain spaces throws away the document's actual line
+   structure. This tracks each fragment's vertical position and starts a
+   new line whenever it jumps meaningfully, so the plain-text box below
+   the preview roughly mirrors how the voucher actually reads. */
 function pdfTextContentToLines_(textContent){
   let lines = [];
   let currentLine = '';
@@ -2506,14 +2527,134 @@ function pdfTextContentToLines_(textContent){
   return lines.filter(l => l).join('\n');
 }
 
-async function extractVoucherPdfText_(){
+/* Combines two 2D affine transforms (pdf.js's own [a,b,c,d,e,f] convention).
+   This is the standard formula pdf.js's own text-layer code uses to turn a
+   text item's PDF-space transform into page-pixel coordinates — written
+   out directly here rather than depending on an internal pdfjsLib.Util
+   export that isn't guaranteed stable across builds. */
+function combineTransforms_(m1, m2){
+  return [
+    m1[0]*m2[0] + m1[2]*m2[1], m1[1]*m2[0] + m1[3]*m2[1],
+    m1[0]*m2[2] + m1[2]*m2[3], m1[1]*m2[2] + m1[3]*m2[3],
+    m1[0]*m2[4] + m1[2]*m2[5] + m1[4], m1[1]*m2[4] + m1[3]*m2[5] + m1[5]
+  ];
+}
+
+/* One positioned, editable, right-clickable box — used for both PDF text
+   fragments and OCR'd words. Content edits live only in the DOM (read at
+   fill-time via textContent); nothing needs to sync them back anywhere
+   else unless the person actually right-clicks to use one. */
+function buildVoucherFragmentEl_(text, left, top, fontHeight){
+  const div = document.createElement('div');
+  div.contentEditable = 'true';
+  div.spellcheck = false;
+  div.textContent = text;
+  div.style.cssText = 'position:absolute;left:' + left + 'px;top:' + top + 'px;font-size:' + Math.max(fontHeight * 0.9, 8) +
+    'px;line-height:1.15;white-space:nowrap;pointer-events:auto;padding:0 1px;border-radius:2px;cursor:text;background:rgba(255,235,90,0.28)';
+  div.oncontextmenu = onVoucherFragmentContextMenu_;
+  div.onmouseover = () => { div.style.background = 'rgba(255,210,60,0.55)'; };
+  div.onmouseout = () => { div.style.background = 'rgba(255,235,90,0.28)'; };
+  return div;
+}
+
+/* Renders the current PDF page to the visible canvas, rebuilds the
+   editable-fragment overlay on top (kept in sync — same viewport/scale
+   for both, done together in one pass), and refreshes the plain-text box.
+   Positioning assumes horizontal, non-rotated text, which covers the
+   vast majority of real hotel-voucher PDFs; a rotated or heavily
+   stylized layout may position boxes a little off. */
+async function redrawCurrentPdfPage_(){
   const s = window._voucherState;
+  renderVoucherPanel_();
+  const canvas = document.getElementById('voucherCanvas');
+  const overlay = document.getElementById('voucherOverlay');
+  if (!canvas) return;
+
   const page = await s.pdfDoc.getPage(s.pageNum);
+  const unscaledViewport = page.getViewport({ scale: 1 });
+  const scale = VOUCHER_PREVIEW_WIDTH_ / unscaledViewport.width;
+  const viewport = page.getViewport({ scale: scale });
+
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  canvas.style.width = viewport.width + 'px';
+  canvas.style.height = viewport.height + 'px';
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+
   const textContent = await page.getTextContent();
+  if (overlay) {
+    overlay.innerHTML = '';
+    textContent.items.forEach(item => {
+      if (!item.str || !item.str.trim()) return;
+      const tx = combineTransforms_(viewport.transform, item.transform);
+      const fontHeight = Math.hypot(tx[2], tx[3]) || 10;
+      overlay.appendChild(buildVoucherFragmentEl_(item.str, tx[4], tx[5] - fontHeight * 0.83, fontHeight));
+    });
+  }
+
   const text = pdfTextContentToLines_(textContent);
   s.extractedText = text;
   s.status = text ? '' : 'No text found on this page — it may be a scanned image. Try "Run OCR".';
+  refreshVoucherStatusText_();
+}
+
+/* Updates just the status line and the full-text <textarea> in place —
+   without touching the canvas/overlay above it, so we never trigger the
+   "re-render wipes the just-drawn preview" trap. Falls back to a full
+   renderVoucherPanel_() if those elements don't exist yet (e.g. right
+   after switching kinds). */
+function refreshVoucherStatusText_(){
+  const s = window._voucherState;
+  // Rebuilds the whole panel (status line + full-text box use current
+  // state automatically) and then redraws the canvas/image + overlay
+  // back on top, since a full render wipes them — cheap at this preview
+  // size, and simpler than maintaining a separate partial-update path.
   renderVoucherPanel_();
+  if (s.kind === 'pdf' && s.pdfDoc) {
+    quickRedrawPdfOnly_();
+  } else if (s.kind === 'image') {
+    const img = document.getElementById('voucherImg');
+    if (img) img.src = s.imageDataUrl;
+    rebuildOcrOverlayIfAny_();
+  }
+}
+
+async function quickRedrawPdfOnly_(){
+  const s = window._voucherState;
+  const canvas = document.getElementById('voucherCanvas');
+  const overlay = document.getElementById('voucherOverlay');
+  if (!canvas) return;
+  const page = await s.pdfDoc.getPage(s.pageNum);
+  const unscaledViewport = page.getViewport({ scale: 1 });
+  const scale = VOUCHER_PREVIEW_WIDTH_ / unscaledViewport.width;
+  const viewport = page.getViewport({ scale: scale });
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+  if (overlay && s.lastOcrWords == null) {
+    overlay.innerHTML = '';
+    const textContent = await page.getTextContent();
+    textContent.items.forEach(item => {
+      if (!item.str || !item.str.trim()) return;
+      const tx = combineTransforms_(viewport.transform, item.transform);
+      const fontHeight = Math.hypot(tx[2], tx[3]) || 10;
+      overlay.appendChild(buildVoucherFragmentEl_(item.str, tx[4], tx[5] - fontHeight * 0.83, fontHeight));
+    });
+  }
+}
+
+function rebuildOcrOverlayIfAny_(){
+  const s = window._voucherState;
+  const overlay = document.getElementById('voucherOverlay');
+  if (!overlay || !s.lastOcrWords || !s.lastOcrDisplayScale) return;
+  overlay.innerHTML = '';
+  s.lastOcrWords.forEach(w => {
+    if (!w.text || !w.text.trim()) return;
+    const left = w.bbox.x0 * s.lastOcrDisplayScale;
+    const top = w.bbox.y0 * s.lastOcrDisplayScale;
+    const height = (w.bbox.y1 - w.bbox.y0) * s.lastOcrDisplayScale;
+    overlay.appendChild(buildVoucherFragmentEl_(w.text, left, top, height));
+  });
 }
 
 async function changeVoucherPage_(delta){
@@ -2521,71 +2662,62 @@ async function changeVoucherPage_(delta){
   const next = s.pageNum + delta;
   if (next < 1 || next > s.numPages) return;
   s.pageNum = next;
-  s.extractedText = '';
-  await extractVoucherPdfText_();
-}
-
-/* Renders a PDF page to an off-screen (never displayed) canvas purely so
-   OCR has pixel data to read — only needed as a fallback when a PDF page
-   has no real text layer (i.e. it's actually a scan). Created fresh each
-   time rather than kept around, since there's no visible preview to keep
-   in sync with anymore. */
-async function renderVoucherPageOffscreen_(){
-  const s = window._voucherState;
-  const page = await s.pdfDoc.getPage(s.pageNum);
-  const viewport = page.getViewport({ scale: 2 });
-  const canvas = document.createElement('canvas');
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-  await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
-  return canvas;
+  s.lastOcrWords = null; // OCR results were for the old page
+  await redrawCurrentPdfPage_();
 }
 
 async function runVoucherOcr_(){
   const s = window._voucherState;
   if (typeof Tesseract === 'undefined') { alert('OCR library failed to load — check your internet connection.'); return; }
   s.status = 'Running OCR… this can take a few seconds.';
-  renderVoucherPanel_();
+  refreshVoucherStatusText_();
   try{
-    const source = s.kind === 'image' ? s.imageDataUrl : await renderVoucherPageOffscreen_();
+    let source, displayScale;
+    if (s.kind === 'image') {
+      source = s.imageDataUrl;
+      const naturalSize = await new Promise(resolve => {
+        const probe = new Image();
+        probe.onload = () => resolve({ w: probe.naturalWidth, h: probe.naturalHeight });
+        probe.src = s.imageDataUrl;
+      });
+      displayScale = VOUCHER_PREVIEW_WIDTH_ / naturalSize.w;
+    } else {
+      const page = await s.pdfDoc.getPage(s.pageNum);
+      const unscaledViewport = page.getViewport({ scale: 1 });
+      const ocrScale = 2; // higher than the display scale, for better OCR accuracy
+      const viewport = page.getViewport({ scale: ocrScale });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+      source = canvas;
+      displayScale = VOUCHER_PREVIEW_WIDTH_ / unscaledViewport.width / ocrScale;
+    }
+
     const result = await Tesseract.recognize(source, 'eng');
     s.extractedText = (result.data.text || '').trim();
     s.status = s.extractedText ? '' : 'OCR found no readable text.';
+    s.lastOcrWords = result.data.words || [];
+    s.lastOcrDisplayScale = displayScale;
+    refreshVoucherStatusText_();
+    rebuildOcrOverlayIfAny_();
   }catch(err){
     s.status = 'OCR failed: ' + (err.message || err);
+    refreshVoucherStatusText_();
   }
-  renderVoucherPanel_();
 }
 
 function clearVoucher_(){
-  window._voucherState = Object.assign({}, window._voucherState, { kind:null, fileName:'', imageDataUrl:null, pdfDoc:null, pageNum:1, numPages:1, extractedText:'', status:'' });
+  window._voucherState = Object.assign({}, window._voucherState, { kind:null, fileName:'', imageDataUrl:null, pdfDoc:null, pageNum:1, numPages:1, extractedText:'', status:'', lastOcrWords:null, lastOcrDisplayScale:null });
   renderVoucherPanel_();
 }
 
 // Holds whatever text was highlighted the moment the right-click menu was
 // opened. Deliberately NOT passed through the menu items' onclick HTML —
-// see the note below on why that broke.
+// see the note on fillFieldFromVoucher_ for why that broke before.
 window._voucherSelectedText = '';
 
-/* Right-click on a text selection inside the extracted-text block shows
-   a small menu of DSR fields; picking one fills that field with
-   whatever was selected.
-
-   The selected text is stashed in window._voucherSelectedText rather
-   than being written into each menu item's onclick="..." attribute. It
-   used to be embedded there via JSON.stringify(selected) — but that
-   wraps the text in double quotes, and the onclick attribute itself is
-   ALSO delimited by double quotes, so any real voucher text broke the
-   attribute the instant it appeared (which is every time — that's why
-   filling never actually worked). Keeping the text out of the HTML
-   entirely sidesteps that regardless of what characters show up in it. */
-function onVoucherTextContextMenu_(ev){
-  // textareas don't use window.getSelection() for their own content —
-  // the selected range lives on the element itself.
-  const el = ev.currentTarget;
-  const selected = el.value.substring(el.selectionStart, el.selectionEnd).trim();
-  if (!selected) return; // nothing selected — let the normal browser menu show
-  ev.preventDefault();
+function showVoucherFieldMenu_(x, y, selected){
   window._voucherSelectedText = selected;
 
   const existingMenu = document.getElementById('voucherFieldMenu');
@@ -2593,7 +2725,7 @@ function onVoucherTextContextMenu_(ev){
 
   const menu = document.createElement('div');
   menu.id = 'voucherFieldMenu';
-  menu.style.cssText = 'position:fixed;top:' + ev.clientY + 'px;left:' + ev.clientX + 'px;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.2);z-index:2000;padding:4px 0;min-width:180px;font-size:12px';
+  menu.style.cssText = 'position:fixed;top:' + y + 'px;left:' + x + 'px;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.2);z-index:2000;padding:4px 0;min-width:180px;font-size:12px';
   menu.innerHTML =
     '<div style="padding:6px 12px;color:#8a93a0;border-bottom:1px solid #eee">Fill which field?</div>' +
     VOUCHER_FIELD_TARGETS_.map(([id,label]) =>
@@ -2605,11 +2737,48 @@ function onVoucherTextContextMenu_(ev){
   setTimeout(() => document.addEventListener('click', closeMenu), 0);
 }
 
+/* Right-click on one of the positioned boxes over the document preview.
+   Unlike the plain-text box below (a textarea, where a drag-selection is
+   the only way to pick text), these are real contenteditable elements, so
+   window.getSelection() works for a partial drag-select within one — but
+   a plain right-click with nothing dragged is just as likely here (the
+   boxes are already small/targeted), so that falls back to the box's
+   whole current text. */
+function onVoucherFragmentContextMenu_(ev){
+  ev.preventDefault();
+  ev.stopPropagation();
+  const dragSelected = window.getSelection().toString().trim();
+  const selected = dragSelected || ev.currentTarget.textContent.trim();
+  if (!selected) return;
+  showVoucherFieldMenu_(ev.clientX, ev.clientY, selected);
+}
+
+/* Right-click on a selection inside the full-text box below the preview
+   — for grabbing something that spans several of the small boxes above. */
+function onVoucherTextContextMenu_(ev){
+  // textareas don't use window.getSelection() for their own content —
+  // the selected range lives on the element itself.
+  const el = ev.currentTarget;
+  const selected = el.value.substring(el.selectionStart, el.selectionEnd).trim();
+  if (!selected) return; // nothing selected — let the normal browser menu show
+  ev.preventDefault();
+  showVoucherFieldMenu_(ev.clientX, ev.clientY, selected);
+}
+
 /* Only fills fields that are currently empty — a selection from the
    voucher should never silently overwrite something already typed. Date
    fields get a best-effort parse into yyyy-MM-dd (what <input type=date>
    requires); if that fails, the field is left alone and the person is
-   told to type it manually. */
+   told to type it manually.
+
+   The selected text is passed via window._voucherSelectedText rather
+   than through the menu items' onclick="..." attribute. It used to be
+   embedded there via JSON.stringify(selected) — but that wraps text in
+   double quotes, and the onclick attribute itself is ALSO delimited by
+   double quotes, so any real voucher text broke the attribute the
+   instant it appeared (which is every time — that's why filling never
+   actually worked before). Keeping the text out of the HTML entirely
+   sidesteps that regardless of what characters show up in it. */
 function fillFieldFromVoucher_(fieldId){
   const text = window._voucherSelectedText;
   const el = document.getElementById(fieldId);
@@ -2634,7 +2803,6 @@ function fillFieldFromVoucher_(fieldId){
   if (fieldId === 'inv_vendorName') onVendorNameInput_();
   recalcInvoiceTotals_();
 }
-
 
 /* ---------------------------------------------------------------------
    CHARGE LABEL DEFAULTS (admin) — pre-populates new entries' Custom
