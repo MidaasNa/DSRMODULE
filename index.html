@@ -2136,6 +2136,12 @@ function renderInvoiceModal_(rowId, rec, existing){
       '<div id="invoiceFormContent" style="flex:1;min-width:0;padding:18px 22px;overflow:auto;max-height:94vh">' +
       '<h2 style="margin:0 0 10px;color:#003366;font-size:20px">' + (existing ? 'DSR Entry ' + escapeHtml(existing.invoiceNumber) : 'New DSR Entry') + '</h2>' +
 
+      '<div style="max-width:300px;margin-bottom:14px">' +
+        invoiceFieldRow_('Branch', '<select id="inv_branch" style="width:100%;padding:5px" onchange="onInvoiceBranchChange_()">' +
+          '<option value="">— Select Branch —</option>' +
+          knownBranches_().map(b => '<option' + ((v.branch || (rec&&rec.branch) || currentUser.branch)===b?' selected':'') + '>' + escapeHtml(b) + '</option>').join('') + '</select>') +
+      '</div>' +
+
       '<div style="display:grid;grid-template-columns:1fr;gap:0;align-items:start;max-width:640px">' +
 
         '<div>' +
@@ -2145,7 +2151,7 @@ function renderInvoiceModal_(rowId, rec, existing){
               ['DIRECT','BTC'].map(o => '<option' + (v.billingType===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
             invoiceFieldRow_('Invoice Number', '<input disabled value="' + (existing ? escapeHtml(existing.invoiceNumber) : 'Generated on Create') + '" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
             invoiceFieldRow_('Client Name', '<input id="inv_client" list="inv_clientsDatalist" value="' + escapeHtml(v.client || (rec&&rec.client) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onClientNameInput_()">' +
-              '<datalist id="inv_clientsDatalist">' + window._clientsList.map(c => '<option value="' + escapeHtml(c.name) + '">').join('') + '</datalist>') +
+              '<datalist id="inv_clientsDatalist"></datalist>') +
             invoiceFieldRow_('Vendor Name', '<input id="inv_vendorName" list="inv_vendorsDatalist" value="' + escapeHtml(v.vendorName || (rec&&rec.vendor) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onVendorNameInput_()">' +
               '<datalist id="inv_vendorsDatalist">' + window._vendorsList.map(vd => '<option value="' + escapeHtml(vd.name) + '">').join('') + '</datalist>') +
             invoiceFieldRow_('Hotel Name', '<input id="inv_hotelName" value="' + escapeHtml(v.hotelName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
@@ -2220,6 +2226,7 @@ function renderInvoiceModal_(rowId, rec, existing){
   overlay.style.display = 'block';
   renderChargesRows_();
   renderVoucherPanel_();
+  refreshClientDatalist_();
   recalcInvoiceTotals_();
 }
 
@@ -2240,12 +2247,38 @@ function renderChargesRows_(){
 // Person and Service Charge from that client's saved defaults, but ONLY
 // into fields that are still empty, so it never overwrites something
 // already typed or an existing invoice's real values while editing.
+// Rebuilds the Client Name datalist to only offer clients mapped to the
+// currently-selected Branch — called on modal open and whenever the
+// Branch dropdown changes. If no branch is selected, every client is
+// offered (unfiltered), same as before this feature existed.
+function refreshClientDatalist_(){
+  const datalist = document.getElementById('inv_clientsDatalist');
+  const branchEl = document.getElementById('inv_branch');
+  if (!datalist) return;
+  const branch = branchEl ? branchEl.value : '';
+  const clients = branch ? window._clientsList.filter(c => c.branch === branch) : window._clientsList;
+  datalist.innerHTML = clients.map(c => '<option value="' + escapeHtml(c.name) + '">').join('');
+}
+
+function onInvoiceBranchChange_(){
+  refreshClientDatalist_();
+}
+
+// Person and Service Charge from that client's saved defaults, but ONLY
+// into fields that are still empty, so it never overwrites something
+// already typed or an existing invoice's real values while editing.
 function onClientNameInput_(){
   const clientInput = document.getElementById('inv_client');
   if (!clientInput) return;
   const typed = clientInput.value.trim().toLowerCase();
   if (!typed) return;
-  const match = window._clientsList.find(c => c.name.toLowerCase() === typed);
+  const branchEl = document.getElementById('inv_branch');
+  const branch = branchEl ? branchEl.value : '';
+  // Prefer a match within the selected branch; if a client with this
+  // name exists but under a different branch, still fall back to it
+  // rather than refusing to auto-fill at all (e.g. no branch chosen yet).
+  const candidates = window._clientsList.filter(c => c.name.toLowerCase() === typed);
+  const match = (branch && candidates.find(c => c.branch === branch)) || candidates[0];
   if (!match) return;
 
   const spEl = document.getElementById('inv_salesPerson');
@@ -2274,7 +2307,7 @@ function readInvoiceFormFields_(){
   const hotelChain = val('inv_hotelChain') === 'Other' ? val('inv_hotelChainOther') : val('inv_hotelChain');
   const billingInstruction = val('inv_billingInstruction') === 'Other' ? val('inv_billingInstructionOther') : val('inv_billingInstruction');
   return {
-    billingType: val('inv_billingType'), client: val('inv_client'), vendorName: val('inv_vendorName'),
+    billingType: val('inv_billingType'), branch: val('inv_branch'), client: val('inv_client'), vendorName: val('inv_vendorName'),
     hotelName: val('inv_hotelName'), guestName: val('inv_guestName'),
     checkin: val('inv_checkin'), checkout: val('inv_checkout'),
     city: val('inv_city'), country: val('inv_country'), hotelChain: hotelChain, bookingGivenBy: val('inv_bookingGivenBy'),
@@ -2351,17 +2384,34 @@ function printInvoiceByNumber_(invoiceNumber){
    browse for) the hotel's original voucher — a PDF or a photo/scan — and
    pull data straight off it instead of retyping.
 
+   True in-place editing of a PDF's actual content isn't something a
+   browser tool can do reliably — PDFs store text as positioned glyphs
+   tied to embedded fonts, not reflowable content, and reconstructing
+   that is what dedicated software like Acrobat does with a lot of
+   engineering behind it. What THIS does instead: show the real page,
+   and overlay small, individually editable text boxes positioned right
+   on top of where each piece of text actually sits — close enough to
+   "edit the document" for the purpose of fixing a misread value and
+   filling a DSR field from it, without pretending to touch the real PDF.
+
    - PDF vouchers: pdf.js extracts the REAL text layer instantly and
      accurately (the common case — most hotel confirmations are genuine
-     PDFs, not scans).
+     PDFs, not scans), and each fragment becomes its own positioned,
+     editable, right-clickable box on the rendered page.
    - Image vouchers (or a scanned/photographed PDF with no text layer):
      "Run OCR" recognizes text via Tesseract.js — entirely in the
-     browser, nothing uploaded anywhere.
+     browser, nothing uploaded anywhere — including each word's position,
+     so the same positioned-overlay editing works there too.
 
-   Either way you get real, editable browser text. Select any part of it,
-   right-click, and a menu of DSR fields appears — picking one fills that
-   field, but only if it's still empty (see fillFieldFromVoucher_), so a
-   voucher selection never silently overwrites something already typed.
+   Below the preview there's also a plain text box with everything
+   extracted in reading order — useful for grabbing a phrase that spans
+   several fragments, which right-clicking one small overlay box can't
+   do on its own.
+
+   Either way, right-click any selection (in the overlay OR the text
+   box) to get a menu of DSR fields — picking one fills that field, but
+   only if it's still empty (see fillFieldFromVoucher_), so a voucher
+   selection never silently overwrites something already typed.
    --------------------------------------------------------------------- */
 
 if (window.pdfjsLib) {
@@ -2369,27 +2419,16 @@ if (window.pdfjsLib) {
 }
 
 // Fields offered in the right-click menu, and which form input each
-// fills. Kept to fields a voucher would realistically mention — pricing
-// inputs that are our own business terms (Markup, Commission %, GST,
-// Tax %, Service Charge, Rewards, ROE) aren't included since they're not
-// something you'd find printed on a hotel confirmation.
+// fills. Kept to the fields a voucher would actually mention.
 const VOUCHER_FIELD_TARGETS_ = [
   ['inv_guestName','Guest Name'], ['inv_hotelName','Hotel Name'], ['inv_confirmationNumber','Confirmation Number'],
   ['inv_client','Client Name'], ['inv_vendorName','Vendor Name'], ['inv_bookingGivenBy','Booking Given By'],
-  ['inv_city','City'], ['inv_country','Country'], ['inv_hotelChainOther','Hotel Chain'],
-  ['inv_roomType','Room Type'], ['inv_adults','Adults'], ['inv_children','Children'],
+  ['inv_city','City'], ['inv_country','Country'], ['inv_roomType','Room Type'],
   ['inv_checkin','Check In'], ['inv_checkout','Check Out'], ['inv_pricePerNight','Price Per Night'],
-  ['inv_billingInstructionOther','Billing Instructions'],
-  ['inv_salesPerson','Sales Person Name'], ['inv_remarks','Remarks']
+  ['inv_billingInstruction','Billing Instructions'], ['inv_salesPerson','Sales Person Name']
 ];
 const VOUCHER_DATE_FIELDS_ = ['inv_checkin', 'inv_checkout'];
-// Fields that are actually a <select> + an "Other" text fallback (Hotel
-// Chain, Billing Instructions) — the dropdown always has SOME value by
-// default, so the generic "already filled?" check in
-// fillFieldFromVoucher_ can't use it to mean "empty". These route the
-// voucher text into the Other box instead and switch the dropdown to
-// "Other" to match.
-const VOUCHER_SELECT_WITH_OTHER_ = { 'inv_hotelChainOther':'inv_hotelChain', 'inv_billingInstructionOther':'inv_billingInstruction' };
+const VOUCHER_PREVIEW_WIDTH_ = 420; // px — widened now the form is single-column and has room to give
 
 function toggleVoucherPanel_(){
   window._voucherState.open = !window._voucherState.open;
@@ -2407,7 +2446,7 @@ function renderVoucherPanel_(){
     return;
   }
 
-  container.style.cssText = 'flex:0 0 300px;border-right:1px solid #eee;padding:14px;overflow:auto;max-height:94vh;background:#fafbfc';
+  container.style.cssText = 'flex:0 0 452px;border-right:1px solid #eee;padding:14px;overflow:auto;max-height:94vh;background:#fafbfc';
 
   let body;
   if (!s.kind) {
@@ -2425,14 +2464,21 @@ function renderVoucherPanel_(){
         ? '<div style="font-size:11px;margin-bottom:6px">Page ' + s.pageNum + ' of ' + s.numPages +
           ' <button onclick="changeVoucherPage_(-1)" style="padding:2px 8px">‹</button> <button onclick="changeVoucherPage_(1)" style="padding:2px 8px">›</button></div>'
         : '') +
-      '<div style="display:flex;gap:6px">' +
+      '<div style="position:relative;display:inline-block;max-width:100%">' +
+        (s.kind === 'image'
+          ? '<img id="voucherImg" style="display:block;width:' + VOUCHER_PREVIEW_WIDTH_ + 'px;border:1px solid #eee;border-radius:4px">'
+          : '<canvas id="voucherCanvas" style="display:block;border:1px solid #eee;border-radius:4px"></canvas>') +
+        '<div id="voucherOverlay" style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none"></div>' +
+      '</div>' +
+      '<div style="font-size:10px;color:#8a93a0;margin-top:3px">Click a highlighted box on the document to edit it directly; right-click to fill a field.</div>' +
+      '<div style="margin-top:8px;display:flex;gap:6px">' +
         '<button onclick="runVoucherOcr_()" style="padding:5px 10px;font-size:12px">🔍 Run OCR</button>' +
         '<button onclick="clearVoucher_()" style="padding:5px 10px;font-size:12px">✕ Remove</button>' +
       '</div>' +
       (s.status ? '<div style="margin-top:6px;font-size:11px;color:#8a93a0">' + escapeHtml(s.status) + '</div>' : '') +
-      (s.extractedText || s.kind
-        ? '<div style="margin-top:10px;font-size:11px;font-weight:600;color:#3f4750">Extracted text — edit if needed, select some, then right-click:</div>' +
-          '<textarea id="voucherTextBlock" oncontextmenu="onVoucherTextContextMenu_(event)" oninput="window._voucherState.extractedText=this.value" spellcheck="false" style="margin-top:4px;width:100%;box-sizing:border-box;padding:8px;background:#fff;border:1px solid #eee;border-radius:4px;font-size:11px;font-family:inherit;line-height:1.5;height:420px;resize:vertical">' + escapeHtml(s.extractedText) + '</textarea>'
+      (s.extractedText
+        ? '<div style="margin-top:10px;font-size:11px;font-weight:600;color:#3f4750">Full text (for selections spanning several boxes above):</div>' +
+          '<textarea id="voucherTextBlock" oncontextmenu="onVoucherTextContextMenu_(event)" oninput="window._voucherState.extractedText=this.value" spellcheck="false" style="margin-top:4px;width:100%;box-sizing:border-box;padding:8px;background:#fff;border:1px solid #eee;border-radius:4px;font-size:11px;font-family:inherit;line-height:1.5;height:160px;resize:vertical">' + escapeHtml(s.extractedText) + '</textarea>'
         : '');
   }
 
@@ -2470,19 +2516,20 @@ async function handleVoucherFile_(file){
       s.pdfDoc = pdf;
       s.numPages = pdf.numPages;
       s.pageNum = 1;
-      await extractVoucherPdfText_();
+      await redrawCurrentPdfPage_();
     }catch(err){
       s.status = 'Could not load this PDF: ' + (err.message || err);
       renderVoucherPanel_();
     }
   } else if (file.type.startsWith('image/')) {
     s.kind = 'image';
-    s.imageDataUrl = null;
     const reader = new FileReader();
     reader.onload = () => {
       s.imageDataUrl = reader.result;
-      s.status = 'Click "Run OCR" to extract text from this image.';
+      s.status = 'Click "Run OCR" to recognize and position text on this image.';
       renderVoucherPanel_();
+      const img = document.getElementById('voucherImg');
+      if (img) img.src = s.imageDataUrl;
     };
     reader.readAsDataURL(file);
   } else {
@@ -2492,10 +2539,9 @@ async function handleVoucherFile_(file){
 
 /* pdf.js hands back text as a flat list of positioned fragments — joining
    them with plain spaces throws away the document's actual line
-   structure and produces one unreadable run-on paragraph. This instead
-   tracks each fragment's vertical position and starts a new line
-   whenever it jumps meaningfully from the previous one, so the extracted
-   text roughly mirrors how the voucher actually reads on the page. */
+   structure. This tracks each fragment's vertical position and starts a
+   new line whenever it jumps meaningfully, so the plain-text box below
+   the preview roughly mirrors how the voucher actually reads. */
 function pdfTextContentToLines_(textContent){
   let lines = [];
   let currentLine = '';
@@ -2514,14 +2560,134 @@ function pdfTextContentToLines_(textContent){
   return lines.filter(l => l).join('\n');
 }
 
-async function extractVoucherPdfText_(){
+/* Combines two 2D affine transforms (pdf.js's own [a,b,c,d,e,f] convention).
+   This is the standard formula pdf.js's own text-layer code uses to turn a
+   text item's PDF-space transform into page-pixel coordinates — written
+   out directly here rather than depending on an internal pdfjsLib.Util
+   export that isn't guaranteed stable across builds. */
+function combineTransforms_(m1, m2){
+  return [
+    m1[0]*m2[0] + m1[2]*m2[1], m1[1]*m2[0] + m1[3]*m2[1],
+    m1[0]*m2[2] + m1[2]*m2[3], m1[1]*m2[2] + m1[3]*m2[3],
+    m1[0]*m2[4] + m1[2]*m2[5] + m1[4], m1[1]*m2[4] + m1[3]*m2[5] + m1[5]
+  ];
+}
+
+/* One positioned, editable, right-clickable box — used for both PDF text
+   fragments and OCR'd words. Content edits live only in the DOM (read at
+   fill-time via textContent); nothing needs to sync them back anywhere
+   else unless the person actually right-clicks to use one. */
+function buildVoucherFragmentEl_(text, left, top, fontHeight){
+  const div = document.createElement('div');
+  div.contentEditable = 'true';
+  div.spellcheck = false;
+  div.textContent = text;
+  div.style.cssText = 'position:absolute;left:' + left + 'px;top:' + top + 'px;font-size:' + Math.max(fontHeight * 0.9, 8) +
+    'px;line-height:1.15;white-space:nowrap;pointer-events:auto;padding:0 1px;border-radius:2px;cursor:text;background:rgba(255,235,90,0.28)';
+  div.oncontextmenu = onVoucherFragmentContextMenu_;
+  div.onmouseover = () => { div.style.background = 'rgba(255,210,60,0.55)'; };
+  div.onmouseout = () => { div.style.background = 'rgba(255,235,90,0.28)'; };
+  return div;
+}
+
+/* Renders the current PDF page to the visible canvas, rebuilds the
+   editable-fragment overlay on top (kept in sync — same viewport/scale
+   for both, done together in one pass), and refreshes the plain-text box.
+   Positioning assumes horizontal, non-rotated text, which covers the
+   vast majority of real hotel-voucher PDFs; a rotated or heavily
+   stylized layout may position boxes a little off. */
+async function redrawCurrentPdfPage_(){
   const s = window._voucherState;
+  renderVoucherPanel_();
+  const canvas = document.getElementById('voucherCanvas');
+  const overlay = document.getElementById('voucherOverlay');
+  if (!canvas) return;
+
   const page = await s.pdfDoc.getPage(s.pageNum);
+  const unscaledViewport = page.getViewport({ scale: 1 });
+  const scale = VOUCHER_PREVIEW_WIDTH_ / unscaledViewport.width;
+  const viewport = page.getViewport({ scale: scale });
+
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  canvas.style.width = viewport.width + 'px';
+  canvas.style.height = viewport.height + 'px';
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+
   const textContent = await page.getTextContent();
+  if (overlay) {
+    overlay.innerHTML = '';
+    textContent.items.forEach(item => {
+      if (!item.str || !item.str.trim()) return;
+      const tx = combineTransforms_(viewport.transform, item.transform);
+      const fontHeight = Math.hypot(tx[2], tx[3]) || 10;
+      overlay.appendChild(buildVoucherFragmentEl_(item.str, tx[4], tx[5] - fontHeight * 0.83, fontHeight));
+    });
+  }
+
   const text = pdfTextContentToLines_(textContent);
   s.extractedText = text;
   s.status = text ? '' : 'No text found on this page — it may be a scanned image. Try "Run OCR".';
+  refreshVoucherStatusText_();
+}
+
+/* Updates just the status line and the full-text <textarea> in place —
+   without touching the canvas/overlay above it, so we never trigger the
+   "re-render wipes the just-drawn preview" trap. Falls back to a full
+   renderVoucherPanel_() if those elements don't exist yet (e.g. right
+   after switching kinds). */
+function refreshVoucherStatusText_(){
+  const s = window._voucherState;
+  // Rebuilds the whole panel (status line + full-text box use current
+  // state automatically) and then redraws the canvas/image + overlay
+  // back on top, since a full render wipes them — cheap at this preview
+  // size, and simpler than maintaining a separate partial-update path.
   renderVoucherPanel_();
+  if (s.kind === 'pdf' && s.pdfDoc) {
+    quickRedrawPdfOnly_();
+  } else if (s.kind === 'image') {
+    const img = document.getElementById('voucherImg');
+    if (img) img.src = s.imageDataUrl;
+    rebuildOcrOverlayIfAny_();
+  }
+}
+
+async function quickRedrawPdfOnly_(){
+  const s = window._voucherState;
+  const canvas = document.getElementById('voucherCanvas');
+  const overlay = document.getElementById('voucherOverlay');
+  if (!canvas) return;
+  const page = await s.pdfDoc.getPage(s.pageNum);
+  const unscaledViewport = page.getViewport({ scale: 1 });
+  const scale = VOUCHER_PREVIEW_WIDTH_ / unscaledViewport.width;
+  const viewport = page.getViewport({ scale: scale });
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+  if (overlay && s.lastOcrWords == null) {
+    overlay.innerHTML = '';
+    const textContent = await page.getTextContent();
+    textContent.items.forEach(item => {
+      if (!item.str || !item.str.trim()) return;
+      const tx = combineTransforms_(viewport.transform, item.transform);
+      const fontHeight = Math.hypot(tx[2], tx[3]) || 10;
+      overlay.appendChild(buildVoucherFragmentEl_(item.str, tx[4], tx[5] - fontHeight * 0.83, fontHeight));
+    });
+  }
+}
+
+function rebuildOcrOverlayIfAny_(){
+  const s = window._voucherState;
+  const overlay = document.getElementById('voucherOverlay');
+  if (!overlay || !s.lastOcrWords || !s.lastOcrDisplayScale) return;
+  overlay.innerHTML = '';
+  s.lastOcrWords.forEach(w => {
+    if (!w.text || !w.text.trim()) return;
+    const left = w.bbox.x0 * s.lastOcrDisplayScale;
+    const top = w.bbox.y0 * s.lastOcrDisplayScale;
+    const height = (w.bbox.y1 - w.bbox.y0) * s.lastOcrDisplayScale;
+    overlay.appendChild(buildVoucherFragmentEl_(w.text, left, top, height));
+  });
 }
 
 async function changeVoucherPage_(delta){
@@ -2529,41 +2695,53 @@ async function changeVoucherPage_(delta){
   const next = s.pageNum + delta;
   if (next < 1 || next > s.numPages) return;
   s.pageNum = next;
-  await extractVoucherPdfText_();
-}
-
-/* Renders a PDF page to an off-screen (never displayed) canvas purely so
-   OCR has pixel data to read — only needed as a fallback when a PDF page
-   has no real text layer (i.e. it's actually a scan). */
-async function renderVoucherPageOffscreen_(){
-  const s = window._voucherState;
-  const page = await s.pdfDoc.getPage(s.pageNum);
-  const viewport = page.getViewport({ scale: 2 });
-  const canvas = document.createElement('canvas');
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-  await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
-  return canvas;
+  s.lastOcrWords = null; // OCR results were for the old page
+  await redrawCurrentPdfPage_();
 }
 
 async function runVoucherOcr_(){
   const s = window._voucherState;
   if (typeof Tesseract === 'undefined') { alert('OCR library failed to load — check your internet connection.'); return; }
   s.status = 'Running OCR… this can take a few seconds.';
-  renderVoucherPanel_();
+  refreshVoucherStatusText_();
   try{
-    const source = s.kind === 'image' ? s.imageDataUrl : await renderVoucherPageOffscreen_();
+    let source, displayScale;
+    if (s.kind === 'image') {
+      source = s.imageDataUrl;
+      const naturalSize = await new Promise(resolve => {
+        const probe = new Image();
+        probe.onload = () => resolve({ w: probe.naturalWidth, h: probe.naturalHeight });
+        probe.src = s.imageDataUrl;
+      });
+      displayScale = VOUCHER_PREVIEW_WIDTH_ / naturalSize.w;
+    } else {
+      const page = await s.pdfDoc.getPage(s.pageNum);
+      const unscaledViewport = page.getViewport({ scale: 1 });
+      const ocrScale = 2; // higher than the display scale, for better OCR accuracy
+      const viewport = page.getViewport({ scale: ocrScale });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+      source = canvas;
+      displayScale = VOUCHER_PREVIEW_WIDTH_ / unscaledViewport.width / ocrScale;
+    }
+
     const result = await Tesseract.recognize(source, 'eng');
     s.extractedText = (result.data.text || '').trim();
     s.status = s.extractedText ? '' : 'OCR found no readable text.';
+    s.lastOcrWords = result.data.words || [];
+    s.lastOcrDisplayScale = displayScale;
+    refreshVoucherStatusText_();
+    rebuildOcrOverlayIfAny_();
   }catch(err){
     s.status = 'OCR failed: ' + (err.message || err);
+    refreshVoucherStatusText_();
   }
-  renderVoucherPanel_();
 }
 
 function clearVoucher_(){
-  window._voucherState = Object.assign({}, window._voucherState, { kind:null, fileName:'', imageDataUrl:null, pdfDoc:null, pageNum:1, numPages:1, extractedText:'', status:'' });
+  window._voucherState = Object.assign({}, window._voucherState, { kind:null, fileName:'', imageDataUrl:null, pdfDoc:null, pageNum:1, numPages:1, extractedText:'', status:'', lastOcrWords:null, lastOcrDisplayScale:null });
   renderVoucherPanel_();
 }
 
@@ -2572,16 +2750,7 @@ function clearVoucher_(){
 // see the note on fillFieldFromVoucher_ for why that broke before.
 window._voucherSelectedText = '';
 
-/* Right-click on a text selection inside the extracted-text box shows a
-   small menu of DSR fields; picking one fills that field with whatever
-   was selected. */
-function onVoucherTextContextMenu_(ev){
-  // textareas don't use window.getSelection() for their own content —
-  // the selected range lives on the element itself.
-  const el = ev.currentTarget;
-  const selected = el.value.substring(el.selectionStart, el.selectionEnd).trim();
-  if (!selected) return; // nothing selected — let the normal browser menu show
-  ev.preventDefault();
+function showVoucherFieldMenu_(x, y, selected){
   window._voucherSelectedText = selected;
 
   const existingMenu = document.getElementById('voucherFieldMenu');
@@ -2589,7 +2758,7 @@ function onVoucherTextContextMenu_(ev){
 
   const menu = document.createElement('div');
   menu.id = 'voucherFieldMenu';
-  menu.style.cssText = 'position:fixed;top:' + ev.clientY + 'px;left:' + ev.clientX + 'px;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.2);z-index:2000;padding:4px 0;min-width:180px;max-height:340px;overflow:auto;font-size:12px';
+  menu.style.cssText = 'position:fixed;top:' + y + 'px;left:' + x + 'px;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.2);z-index:2000;padding:4px 0;min-width:180px;font-size:12px';
   menu.innerHTML =
     '<div style="padding:6px 12px;color:#8a93a0;border-bottom:1px solid #eee">Fill which field?</div>' +
     VOUCHER_FIELD_TARGETS_.map(([id,label]) =>
@@ -2601,14 +2770,39 @@ function onVoucherTextContextMenu_(ev){
   setTimeout(() => document.addEventListener('click', closeMenu), 0);
 }
 
+/* Right-click on one of the positioned boxes over the document preview.
+   Unlike the plain-text box below (a textarea, where a drag-selection is
+   the only way to pick text), these are real contenteditable elements, so
+   window.getSelection() works for a partial drag-select within one — but
+   a plain right-click with nothing dragged is just as likely here (the
+   boxes are already small/targeted), so that falls back to the box's
+   whole current text. */
+function onVoucherFragmentContextMenu_(ev){
+  ev.preventDefault();
+  ev.stopPropagation();
+  const dragSelected = window.getSelection().toString().trim();
+  const selected = dragSelected || ev.currentTarget.textContent.trim();
+  if (!selected) return;
+  showVoucherFieldMenu_(ev.clientX, ev.clientY, selected);
+}
+
+/* Right-click on a selection inside the full-text box below the preview
+   — for grabbing something that spans several of the small boxes above. */
+function onVoucherTextContextMenu_(ev){
+  // textareas don't use window.getSelection() for their own content —
+  // the selected range lives on the element itself.
+  const el = ev.currentTarget;
+  const selected = el.value.substring(el.selectionStart, el.selectionEnd).trim();
+  if (!selected) return; // nothing selected — let the normal browser menu show
+  ev.preventDefault();
+  showVoucherFieldMenu_(ev.clientX, ev.clientY, selected);
+}
+
 /* Only fills fields that are currently empty — a selection from the
    voucher should never silently overwrite something already typed. Date
    fields get a best-effort parse into yyyy-MM-dd (what <input type=date>
    requires); if that fails, the field is left alone and the person is
-   told to type it manually. Hotel Chain and Billing Instructions are
-   special-cased via VOUCHER_SELECT_WITH_OTHER_: they fill the "Other"
-   free-text box under their dropdown and switch the dropdown to "Other",
-   since that text is what actually gets saved.
+   told to type it manually.
 
    The selected text is passed via window._voucherSelectedText rather
    than through the menu items' onclick="..." attribute. It used to be
@@ -2620,26 +2814,10 @@ function onVoucherTextContextMenu_(ev){
    sidesteps that regardless of what characters show up in it. */
 function fillFieldFromVoucher_(fieldId){
   const text = window._voucherSelectedText;
+  const el = document.getElementById(fieldId);
   const menu = document.getElementById('voucherFieldMenu');
   if (menu) menu.remove();
-  if (!text) return;
-
-  if (fieldId in VOUCHER_SELECT_WITH_OTHER_) {
-    const select = document.getElementById(VOUCHER_SELECT_WITH_OTHER_[fieldId]);
-    const other = document.getElementById(fieldId);
-    if (!other) return;
-    if (other.value) { alert('That field already has a value — clear it first if you want to replace it from the voucher.'); return; }
-    if (select) select.value = 'Other';
-    other.style.display = 'block';
-    other.value = text;
-    other.style.background = '#eaf3ea';
-    setTimeout(() => { other.style.background = ''; }, 1200);
-    recalcInvoiceTotals_();
-    return;
-  }
-
-  const el = document.getElementById(fieldId);
-  if (!el) return;
+  if (!el || !text) return;
   if (el.value) { alert('That field already has a value — clear it first if you want to replace it from the voucher.'); return; }
 
   if (VOUCHER_DATE_FIELDS_.includes(fieldId)) {
@@ -2658,7 +2836,6 @@ function fillFieldFromVoucher_(fieldId){
   if (fieldId === 'inv_vendorName') onVendorNameInput_();
   recalcInvoiceTotals_();
 }
-
 
 /* ---------------------------------------------------------------------
    CHARGE LABEL DEFAULTS (admin) — pre-populates new entries' Custom
@@ -2752,12 +2929,12 @@ function renderClientsVendorsTab_(){
     .filter(r => !search || r.name.toLowerCase().includes(search));
 
   const headCols = isClients
-    ? ['Client Name','Sales Person','Service Charge','City','Country','GST Number','Contact Person','Phone']
+    ? ['Client Name','Branch','Sales Person','Service Charge','City','Country','GST Number','Contact Person','Phone']
     : ['Vendor Name','Commission %','City','Country','GST Number','Contact Person','Phone'];
 
   const rowHtml = r => {
     const cells = isClients
-      ? [r.name, r.salesPerson, r.serviceCharge, r.city, r.country, r.gstNumber, r.contactPerson, r.phone]
+      ? [r.name, r.branch, r.salesPerson, r.serviceCharge, r.city, r.country, r.gstNumber, r.contactPerson, r.phone]
       : [r.name, r.commissionPercent, r.city, r.country, r.gstNumber, r.contactPerson, r.phone];
     const tds = cells.map(v => '<td style="padding:6px 8px;font-size:12px;border-bottom:1px solid #f0f0f0">' + escapeHtml(String(v ?? '')) + '</td>').join('');
     const actions = canEdit
@@ -2782,15 +2959,28 @@ function cvFieldRow_(labelText, inputHtml){
     escapeHtml(labelText) + '</label>' + inputHtml + '</div>';
 }
 
+// Branches aren't a fixed enum anywhere in this app — they're whatever
+// values appear in the Users sheet's Branch column. window._allBranchEmployees
+// (loaded at login via loadBranchEmployees) already has everyone across
+// every branch, so that's the source of truth for "what branches exist."
+function knownBranches_(){
+  const all = window._allBranchEmployees || [];
+  return [...new Set(all.map(u => u.branch).filter(Boolean))].sort();
+}
+
 function openClientDetailModal_(encodedName){
   const existing = encodedName ? window._clientsList.find(c => c.name === decodeURIComponent(encodedName)) : null;
   const v = existing || {};
   const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
+  const branches = knownBranches_();
   overlay.innerHTML =
     '<div style="max-width:520px;margin:24px auto;background:#fff;border-radius:10px;padding:22px;max-height:92vh;overflow:auto">' +
       '<h2 style="margin-top:0;color:#003366">' + (existing ? 'Edit Client' : 'Add Client') + '</h2>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
         cvFieldRow_('Client Name', '<input id="cv_name" value="' + escapeHtml(v.name||'') + '" ' + (existing?'readonly style="background:#f2f4f6"':'') + ' style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('Branch', '<select id="cv_branch" style="width:100%;padding:6px">' +
+          '<option value="">— None —</option>' +
+          branches.map(b => '<option' + (v.branch===b?' selected':'') + '>' + escapeHtml(b) + '</option>').join('') + '</select>') +
         cvFieldRow_('Default Sales Person', '<input id="cv_salesPerson" value="' + escapeHtml(v.salesPerson||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
         cvFieldRow_('Default Service Charge', '<input type="number" step="0.01" id="cv_serviceCharge" value="' + escapeHtml(String(v.serviceCharge ?? '')) + '" style="width:100%;padding:6px;box-sizing:border-box">') +
         cvFieldRow_('GST Number', '<input id="cv_gstNumber" value="' + escapeHtml(v.gstNumber||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
@@ -2814,7 +3004,7 @@ function openClientDetailModal_(encodedName){
 async function saveClientDetail_(){
   const val = id => document.getElementById(id).value;
   const client = {
-    name: val('cv_name'), salesPerson: val('cv_salesPerson'), serviceCharge: val('cv_serviceCharge'),
+    name: val('cv_name'), branch: val('cv_branch'), salesPerson: val('cv_salesPerson'), serviceCharge: val('cv_serviceCharge'),
     address: val('cv_address'), city: val('cv_city'), state: val('cv_state'), country: val('cv_country'),
     gstNumber: val('cv_gstNumber'), panNumber: val('cv_panNumber'), contactPerson: val('cv_contactPerson'),
     email: val('cv_email'), phone: val('cv_phone')
@@ -2916,13 +3106,13 @@ function closeCvDetailModal_(){
 function openBulkImportModal_(){
   const isClients = window._cvView === 'clients';
   const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
-  const clientCols = 'Name, Sales Person, Service Charge, Address, City, State, Country, GST Number, PAN Number, Contact Person, Email, Phone';
+  const clientCols = 'Name, Branch, Sales Person, Service Charge, Address, City, State, Country, GST Number, PAN Number, Contact Person, Email, Phone';
   const vendorCols = 'Name, Commission %, Address, City, State, Country, GST Number, PAN Number, Contact Person, Email, Phone';
   overlay.innerHTML =
     '<div style="max-width:640px;margin:30px auto;background:#fff;border-radius:10px;padding:22px">' +
       '<h2 style="margin-top:0;color:#003366">Bulk Import ' + (isClients?'Clients':'Vendors') + '</h2>' +
       '<p style="color:#4a5560;font-size:13px">One row per line, comma or tab separated, in this order (only the name is required — leave the rest blank if you don\'t have it yet):<br><code>' + (isClients?clientCols:vendorCols) + '</code></p>' +
-      '<textarea id="cv_bulk_paste" rows="10" style="width:100%;padding:8px;box-sizing:border-box;font-family:monospace;font-size:12px" placeholder="' + (isClients ? 'Acme Corp, Priya, 500, 12 MG Road, Bangalore, KA, India, 29ABCDE1234F1Z5' : 'Acme Hotels, 10, 12 MG Road, Bangalore, KA, India, 29ABCDE1234F1Z5') + '"></textarea>' +
+      '<textarea id="cv_bulk_paste" rows="10" style="width:100%;padding:8px;box-sizing:border-box;font-family:monospace;font-size:12px" placeholder="' + (isClients ? 'Acme Corp, Bangalore, Priya, 500, 12 MG Road, Bangalore, KA, India, 29ABCDE1234F1Z5' : 'Acme Hotels, 10, 12 MG Road, Bangalore, KA, India, 29ABCDE1234F1Z5') + '"></textarea>' +
       '<div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">' +
         '<button onclick="closeCvDetailModal_()" style="padding:9px 16px">Cancel</button>' +
         '<button onclick="submitBulkImport_(\'append\')" style="padding:9px 16px">Add / Update</button>' +
@@ -2942,7 +3132,7 @@ async function submitBulkImport_(mode){
     if (isClients) {
       const clients = lines.map(line => {
         const p = line.split(/\t|,/).map(x => x.trim());
-        return { name:p[0]||'', salesPerson:p[1]||'', serviceCharge:p[2]||'', address:p[3]||'', city:p[4]||'', state:p[5]||'', country:p[6]||'', gstNumber:p[7]||'', panNumber:p[8]||'', contactPerson:p[9]||'', email:p[10]||'', phone:p[11]||'' };
+        return { name:p[0]||'', branch:p[1]||'', salesPerson:p[2]||'', serviceCharge:p[3]||'', address:p[4]||'', city:p[5]||'', state:p[6]||'', country:p[7]||'', gstNumber:p[8]||'', panNumber:p[9]||'', contactPerson:p[10]||'', email:p[11]||'', phone:p[12]||'' };
       }).filter(c => c.name);
       await apiPost({ action:'importClients', clients:clients, mode:mode, actor:currentUser });
     } else {
