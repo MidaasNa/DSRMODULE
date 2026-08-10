@@ -1985,7 +1985,7 @@ window._vendorsList = [];  // ['Vendor A', 'Vendor B', ...]
 
 const HOTEL_CHAINS_ = ['Marriott','Hilton','IHG','Accor','Hyatt','Radisson','Taj','Oberoi','ITC','Lemon Tree','Other'];
 const CURRENCIES_ = ['INR','USD','EUR','GBP','AED','SGD','MYR','AUD'];
-const BILLING_INSTRUCTIONS_ = ['BTC-INR','BTC-USD','BTC-EUR','DIRECT-INR','DIRECT-USD','DIRECT-EUR','Other'];
+const BILLING_INSTRUCTIONS_ = ['BTC-INR','BTC-USD','BTC-EUR','BTC-GBP','DIRECT','Other'];
 
 async function loadChargeLabelDefaults(){
   try{
@@ -2033,7 +2033,8 @@ function computeInvoiceTotalsClient_(f){
   const taxPct = Number(f.taxPercent) || 0;
   const serviceCharge = Number(f.serviceCharge) || 0;
   const reward = Number(f.reward) || 0;
-  const gstBilled = String(f.gstBilled||'').toLowerCase() === 'yes';
+  const isDirect = String(f.billingType||'').toUpperCase() === 'DIRECT';
+  const gstBilled = !isDirect && String(f.gstBilled||'').toLowerCase() === 'yes';
   const gstPct = gstBilled ? ((f.gstPercent === '' || f.gstPercent == null) ? 18 : Number(f.gstPercent)) : 0;
   const roe = Number(f.roe) || 1;
   const customCharges = Array.isArray(f.customCharges) ? f.customCharges : [];
@@ -2152,7 +2153,7 @@ function renderInvoiceModal_(rowId, rec, existing){
         '<div>' +
           invoiceSectionHeader_('1. Billing Information') +
           '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
-            invoiceFieldRow_('Billing Type', '<select id="inv_billingType" style="width:100%;padding:5px" ' + (existing?'disabled':'') + ' onchange="onInvoiceBranchChange_()">' +
+            invoiceFieldRow_('Billing Type', '<select id="inv_billingType" style="width:100%;padding:5px" ' + (existing?'disabled':'') + ' onchange="onInvoiceBranchChange_();recalcInvoiceTotals_()">' +
               ['DIRECT','BTC'].map(o => '<option' + (v.billingType===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
             invoiceFieldRow_('Invoice Number', '<input disabled value="' + (existing ? escapeHtml(existing.invoiceNumber) : 'Generated on Create') + '" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
             invoiceFieldRow_('Client Name', '<input id="inv_client" list="inv_clientsDatalist" value="' + escapeHtml(v.client || (rec&&rec.client) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onClientNameInput_()">' +
@@ -2352,7 +2353,8 @@ function recalcInvoiceTotals_(){
   const el = document.getElementById('inv_totals');
   if (!el) return;
   const gstBilled = String(fields.gstBilled||'').toLowerCase() === 'yes';
-  const gstNote = !gstBilled ? 'not billed (SEZ or GST off)' : (Number(fields.serviceCharge)||0) > 0 ? 'on Service Charge only' : 'on full Selling Price';
+  const isDirectNote = String(fields.billingType||'').toUpperCase() === 'DIRECT';
+  const gstNote = isDirectNote ? 'not billed (DIRECT booking)' : !gstBilled ? 'not billed (SEZ or GST off)' : (Number(fields.serviceCharge)||0) > 0 ? 'on Service Charge only' : 'on full Selling Price';
   el.innerHTML =
     'Total Room Cost: <b>' + t.totalRoomCost.toFixed(2) + '</b> &nbsp;·&nbsp; ' +
     'Total Markup: <b>' + t.totalMarkup.toFixed(2) + '</b> &nbsp;·&nbsp; ' +
