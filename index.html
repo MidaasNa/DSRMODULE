@@ -2047,7 +2047,12 @@ function computeInvoiceTotalsClient_(f){
   const commissionAmount = price * (commissionPct/100) * nights;
   const netHotelCost = totalRoomCost + taxAmount;
   const sellingPrice = netHotelCost + totalMarkup + serviceCharge + totalCustomCharges;
-  const gstAmount = sellingPrice * (gstPct/100);
+  // GST base depends on whether there's a Service Charge (see the matching
+  // comment on computeInvoiceTotals_ in Code.gs for the full 3-case rule —
+  // SEZ / service-charge-only / full-price). GST Billed=No already zeroes
+  // gstPct above, so this covers the SEZ case too without a separate check.
+  const gstBase = serviceCharge > 0 ? serviceCharge : sellingPrice;
+  const gstAmount = gstBase * (gstPct/100);
   const totalBilled = sellingPrice + gstAmount;
   const totalBilledINR = totalBilled * roe;
   const profit = totalMarkup + commissionAmount + serviceCharge - reward;
@@ -2293,6 +2298,15 @@ function onClientNameInput_(){
   const scEl = document.getElementById('inv_serviceCharge');
   if (spEl && !spEl.value && match.salesPerson) spEl.value = match.salesPerson;
   if (scEl && !scEl.value && match.serviceCharge !== '' && match.serviceCharge != null) scEl.value = match.serviceCharge;
+
+  // GST Billed is driven by the client's SEZ status, not left to the
+  // "only fill if empty" pattern the other fields use — this is a tax
+  // compliance rule (SEZ clients are zero-rated), not a convenience
+  // default, so it's always set to match whichever client is currently
+  // selected rather than only the first time.
+  const gstBilledEl = document.getElementById('inv_gstBilled');
+  if (gstBilledEl) gstBilledEl.value = (String(match.sez||'').toLowerCase() === 'yes') ? 'No' : 'Yes';
+
   recalcInvoiceTotals_();
 }
 
@@ -2337,12 +2351,14 @@ function recalcInvoiceTotals_(){
   if (nightsEl) nightsEl.value = t.nights;
   const el = document.getElementById('inv_totals');
   if (!el) return;
+  const gstBilled = String(fields.gstBilled||'').toLowerCase() === 'yes';
+  const gstNote = !gstBilled ? 'not billed (SEZ or GST off)' : (Number(fields.serviceCharge)||0) > 0 ? 'on Service Charge only' : 'on full Selling Price';
   el.innerHTML =
     'Total Room Cost: <b>' + t.totalRoomCost.toFixed(2) + '</b> &nbsp;·&nbsp; ' +
     'Total Markup: <b>' + t.totalMarkup.toFixed(2) + '</b> &nbsp;·&nbsp; ' +
     'Net Hotel Cost: <b>' + t.netHotelCost.toFixed(2) + '</b><br>' +
     'Selling Price: <b>' + t.sellingPrice.toFixed(2) + '</b> &nbsp;·&nbsp; ' +
-    'GST: <b>' + t.gstAmount.toFixed(2) + '</b> &nbsp;·&nbsp; ' +
+    'GST: <b>' + t.gstAmount.toFixed(2) + '</b> <span style="color:#8a93a0">(' + gstNote + ')</span> &nbsp;·&nbsp; ' +
     'Total Billed: <b>' + t.totalBilled.toFixed(2) + ' ' + escapeHtml(fields.currency||'INR') + '</b><br>' +
     'Total Amount (per Billing Instructions): <b style="color:#003366;font-size:16px">' + t.totalAmount.toFixed(2) + ' ' + escapeHtml(t.settlementCurrency) + '</b><br>' +
     '<span style="color:#4a5560">Commission (from hotel): ' + t.commissionAmount.toFixed(2) + ' &nbsp;·&nbsp; Profit: ' + t.profit.toFixed(2) + ' (' + t.profitPercent.toFixed(1) + '%)</span>';
@@ -2937,12 +2953,12 @@ function renderClientsVendorsTab_(){
     .filter(r => !search || r.name.toLowerCase().includes(search));
 
   const headCols = isClients
-    ? ['Client Name','Branch','Billing Type','Sales Person','Service Charge','City','Country','GST Number','Contact Person','Phone']
+    ? ['Client Name','Branch','Billing Type','SEZ','Sales Person','Service Charge','City','Country','GST Number','Contact Person','Phone']
     : ['Vendor Name','Commission %','City','Country','GST Number','Contact Person','Phone'];
 
   const rowHtml = r => {
     const cells = isClients
-      ? [r.name, r.branch, r.billingType, r.salesPerson, r.serviceCharge, r.city, r.country, r.gstNumber, r.contactPerson, r.phone]
+      ? [r.name, r.branch, r.billingType, r.sez, r.salesPerson, r.serviceCharge, r.city, r.country, r.gstNumber, r.contactPerson, r.phone]
       : [r.name, r.commissionPercent, r.city, r.country, r.gstNumber, r.contactPerson, r.phone];
     const tds = cells.map(v => '<td style="padding:6px 8px;font-size:12px;border-bottom:1px solid #f0f0f0">' + escapeHtml(String(v ?? '')) + '</td>').join('');
     const actions = canEdit
@@ -2992,6 +3008,8 @@ function openClientDetailModal_(encodedName){
         cvFieldRow_('Billing Type', '<select id="cv_billingType" style="width:100%;padding:6px">' +
           '<option value="">— None —</option>' +
           ['DIRECT','BTC'].map(b => '<option' + (v.billingType===b?' selected':'') + '>' + b + '</option>').join('') + '</select>') +
+        cvFieldRow_('SEZ (Special Economic Zone)', '<select id="cv_sez" style="width:100%;padding:6px">' +
+          ['No','Yes'].map(b => '<option' + ((v.sez||'No')===b?' selected':'') + '>' + b + '</option>').join('') + '</select>') +
         cvFieldRow_('Default Sales Person', '<input id="cv_salesPerson" value="' + escapeHtml(v.salesPerson||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
         cvFieldRow_('Default Service Charge', '<input type="number" step="0.01" id="cv_serviceCharge" value="' + escapeHtml(String(v.serviceCharge ?? '')) + '" style="width:100%;padding:6px;box-sizing:border-box">') +
         cvFieldRow_('GST Number', '<input id="cv_gstNumber" value="' + escapeHtml(v.gstNumber||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
@@ -3015,7 +3033,7 @@ function openClientDetailModal_(encodedName){
 async function saveClientDetail_(){
   const val = id => document.getElementById(id).value;
   const client = {
-    name: val('cv_name'), branch: val('cv_branch'), billingType: val('cv_billingType'), salesPerson: val('cv_salesPerson'), serviceCharge: val('cv_serviceCharge'),
+    name: val('cv_name'), branch: val('cv_branch'), billingType: val('cv_billingType'), sez: val('cv_sez'), salesPerson: val('cv_salesPerson'), serviceCharge: val('cv_serviceCharge'),
     address: val('cv_address'), city: val('cv_city'), state: val('cv_state'), country: val('cv_country'),
     gstNumber: val('cv_gstNumber'), panNumber: val('cv_panNumber'), contactPerson: val('cv_contactPerson'),
     email: val('cv_email'), phone: val('cv_phone')
@@ -3117,13 +3135,13 @@ function closeCvDetailModal_(){
 function openBulkImportModal_(){
   const isClients = window._cvView === 'clients';
   const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
-  const clientCols = 'Name, Branch, Billing Type (DIRECT/BTC), Sales Person, Service Charge, Address, City, State, Country, GST Number, PAN Number, Contact Person, Email, Phone';
+  const clientCols = 'Name, Branch, Billing Type (DIRECT/BTC), SEZ (Yes/No), Sales Person, Service Charge, Address, City, State, Country, GST Number, PAN Number, Contact Person, Email, Phone';
   const vendorCols = 'Name, Commission %, Address, City, State, Country, GST Number, PAN Number, Contact Person, Email, Phone';
   overlay.innerHTML =
     '<div style="max-width:640px;margin:30px auto;background:#fff;border-radius:10px;padding:22px">' +
       '<h2 style="margin-top:0;color:#003366">Bulk Import ' + (isClients?'Clients':'Vendors') + '</h2>' +
       '<p style="color:#4a5560;font-size:13px">One row per line, comma or tab separated, in this order (only the name is required — leave the rest blank if you don\'t have it yet):<br><code>' + (isClients?clientCols:vendorCols) + '</code></p>' +
-      '<textarea id="cv_bulk_paste" rows="10" style="width:100%;padding:8px;box-sizing:border-box;font-family:monospace;font-size:12px" placeholder="' + (isClients ? 'Acme Corp, Bangalore, DIRECT, Priya, 500, 12 MG Road, Bangalore, KA, India, 29ABCDE1234F1Z5' : 'Acme Hotels, 10, 12 MG Road, Bangalore, KA, India, 29ABCDE1234F1Z5') + '"></textarea>' +
+      '<textarea id="cv_bulk_paste" rows="10" style="width:100%;padding:8px;box-sizing:border-box;font-family:monospace;font-size:12px" placeholder="' + (isClients ? 'Acme Corp, Bangalore, DIRECT, No, Priya, 500, 12 MG Road, Bangalore, KA, India, 29ABCDE1234F1Z5' : 'Acme Hotels, 10, 12 MG Road, Bangalore, KA, India, 29ABCDE1234F1Z5') + '"></textarea>' +
       '<div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">' +
         '<button onclick="closeCvDetailModal_()" style="padding:9px 16px">Cancel</button>' +
         '<button onclick="submitBulkImport_(\'append\')" style="padding:9px 16px">Add / Update</button>' +
@@ -3143,7 +3161,7 @@ async function submitBulkImport_(mode){
     if (isClients) {
       const clients = lines.map(line => {
         const p = line.split(/\t|,/).map(x => x.trim());
-        return { name:p[0]||'', branch:p[1]||'', billingType:p[2]||'', salesPerson:p[3]||'', serviceCharge:p[4]||'', address:p[5]||'', city:p[6]||'', state:p[7]||'', country:p[8]||'', gstNumber:p[9]||'', panNumber:p[10]||'', contactPerson:p[11]||'', email:p[12]||'', phone:p[13]||'' };
+        return { name:p[0]||'', branch:p[1]||'', billingType:p[2]||'', sez:p[3]||'', salesPerson:p[4]||'', serviceCharge:p[5]||'', address:p[6]||'', city:p[7]||'', state:p[8]||'', country:p[9]||'', gstNumber:p[10]||'', panNumber:p[11]||'', contactPerson:p[12]||'', email:p[13]||'', phone:p[14]||'' };
       }).filter(c => c.name);
       await apiPost({ action:'importClients', clients:clients, mode:mode, actor:currentUser });
     } else {
