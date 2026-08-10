@@ -2047,7 +2047,7 @@ function computeInvoiceTotalsClient_(f){
   // pre-tax room rate, so it's off Price/Night, never off Selling Price.
   const commissionAmount = price * (commissionPct/100) * nights;
   const netHotelCost = totalRoomCost + taxAmount;
-  const sellingPrice = netHotelCost + totalMarkup + serviceCharge + totalCustomCharges;
+  const sellingPrice = netHotelCost + totalMarkup + serviceCharge;
   // GST base depends on whether there's a Service Charge (see the matching
   // comment on computeInvoiceTotals_ in Code.gs for the full 3-case rule —
   // SEZ / service-charge-only / full-price). GST Billed=No already zeroes
@@ -2213,6 +2213,7 @@ function renderInvoiceModal_(rowId, rec, existing){
           invoiceFieldRow_('Remarks', '<textarea id="inv_remarks" rows="2" style="width:100%;padding:5px;box-sizing:border-box">' + escapeHtml(v.remarks || (rec&&rec.remarks) || '') + '</textarea>') +
 
           invoiceSectionHeader_('6. Custom Charges') +
+          '<div style="font-size:11px;color:#8a93a0;margin-bottom:6px">Remarks only — doesn\'t affect Selling Price, Total Billed, or Profit. Use Service Charge above for anything that needs to actually be billed.</div>' +
           '<div id="inv_chargesRows"></div>' +
           '<button onclick="window._invoiceChargesDraft.push({label:\'\',amount:\'\'});renderChargesRows_()" style="margin-top:4px;padding:5px 12px">+ Add Charge</button>' +
         '</div>' +
@@ -2242,7 +2243,7 @@ function renderChargesRows_(){
   el.innerHTML = window._invoiceChargesDraft.map((c, i) =>
     '<div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">' +
       '<input placeholder="Label" value="' + escapeHtml(c.label||'') + '" oninput="window._invoiceChargesDraft[' + i + '].label=this.value" style="flex:2;padding:6px">' +
-      '<input type="number" step="0.01" placeholder="Amount" value="' + escapeHtml(String(c.amount ?? '')) + '" oninput="window._invoiceChargesDraft[' + i + '].amount=this.value;recalcInvoiceTotals_()" style="flex:1;padding:6px">' +
+      '<input placeholder="Amount or note" value="' + escapeHtml(String(c.amount ?? '')) + '" oninput="window._invoiceChargesDraft[' + i + '].amount=this.value;recalcInvoiceTotals_()" style="flex:1;padding:6px">' +
       '<button onclick="window._invoiceChargesDraft.splice(' + i + ',1);renderChargesRows_();recalcInvoiceTotals_()" style="padding:6px 10px">✕</button>' +
     '</div>'
   ).join('');
