@@ -2093,27 +2093,33 @@ async function openInvoiceModal(rowId){
   if (rowId) {
     rec = data.find(r => r.rowId === rowId);
     if (!rec) { alert('Ticket not found — try refreshing.'); return; }
-    if (rec.invoiceNumber) {
-      try{
-        const json = await apiGet({ action:'invoices', rowId: rowId });
-        existing = (json.invoices && json.invoices[0]) || null;
-      }catch(err){
-        alert('Could not load the existing invoice.\n\n' + (err.message || err));
-        return;
-      }
+    // Checked unconditionally (not just when rec.invoiceNumber is set) —
+    // a Proforma deliberately never stamps the ticket's own Invoice
+    // Number column (it isn't a real invoice yet), so relying on that
+    // alone would miss an already-existing Proforma and let a second one
+    // get created for the same ticket.
+    try{
+      const json = await apiGet({ action:'invoices', rowId: rowId });
+      existing = (json.invoices && json.invoices[0]) || null;
+    }catch(err){
+      alert('Could not check for an existing entry.\n\n' + (err.message || err));
+      return;
     }
   }
   renderInvoiceModal_(rowId, rec, existing);
 }
 
-async function openInvoiceModalForNumber(invoiceNumber){
+async function openInvoiceModalForNumber(documentNumber){
   try{
     const json = await apiGet({ action:'dsr' });
-    const existing = (json.invoices || []).find(inv => inv.invoiceNumber === invoiceNumber);
-    if (!existing) { alert('Invoice not found — try refreshing.'); return; }
+    const existing = (json.invoices || []).find(inv =>
+      inv.invoiceNumber === documentNumber || inv.proformaNumber === documentNumber || inv.creditNoteNumber === documentNumber
+    );
+    if (!existing) { alert('Entry not found — try refreshing.'); return; }
+    if (existing.documentType === 'Credit Note') { openCreditNoteModal_(existing); return; }
     renderInvoiceModal_(existing.rowId || null, null, existing);
   }catch(err){
-    alert('Could not load invoice.\n\n' + (err.message || err));
+    alert('Could not load entry.\n\n' + (err.message || err));
   }
 }
 
@@ -2140,7 +2146,7 @@ function renderInvoiceModal_(rowId, rec, existing){
     '<div style="max-width:1600px;width:97vw;margin:14px auto;background:#fff;border-radius:10px;padding:0;max-height:94vh;font-size:13px;display:flex;align-items:stretch;overflow:hidden">' +
       '<div id="voucherPanelContainer"></div>' +
       '<div id="invoiceFormContent" style="flex:1;min-width:0;padding:18px 22px;overflow:auto;max-height:94vh">' +
-      '<h2 style="margin:0 0 10px;color:#003366;font-size:20px">' + (existing ? 'DSR Entry ' + escapeHtml(existing.invoiceNumber) : 'New DSR Entry') + '</h2>' +
+      '<h2 style="margin:0 0 10px;color:#003366;font-size:20px">' + (existing ? (existing.documentType || 'Invoice') + ' ' + escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') : 'New DSR Entry') + '</h2>' +
 
       '<div style="max-width:300px;margin-bottom:14px">' +
         invoiceFieldRow_('Branch', '<select id="inv_branch" style="width:100%;padding:5px" onchange="onInvoiceBranchChange_()">' +
@@ -2155,7 +2161,7 @@ function renderInvoiceModal_(rowId, rec, existing){
           '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
             invoiceFieldRow_('Billing Type', '<select id="inv_billingType" style="width:100%;padding:5px" ' + (existing?'disabled':'') + ' onchange="onInvoiceBranchChange_();recalcInvoiceTotals_()">' +
               ['DIRECT','BTC'].map(o => '<option' + (v.billingType===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
-            invoiceFieldRow_('Invoice Number', '<input disabled value="' + (existing ? escapeHtml(existing.invoiceNumber) : 'Generated on Create') + '" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
+            invoiceFieldRow_((existing && existing.documentType === 'Proforma') ? 'Proforma Number' : 'Invoice Number', '<input disabled value="' + (existing ? escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') : 'Generated on Create/Save as Proforma') + '" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
             invoiceFieldRow_('Client Name', '<input id="inv_client" list="inv_clientsDatalist" value="' + escapeHtml(v.client || (rec&&rec.client) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onClientNameInput_()">' +
               '<datalist id="inv_clientsDatalist"></datalist>') +
             invoiceFieldRow_('Vendor Name', '<input id="inv_vendorName" list="inv_vendorsDatalist" value="' + escapeHtml(v.vendorName || (rec&&rec.vendor) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onVendorNameInput_()">' +
@@ -2222,11 +2228,16 @@ function renderInvoiceModal_(rowId, rec, existing){
 
       '<div id="inv_totals" style="margin-top:14px;padding:10px 12px;background:#f7f8fa;border-radius:8px;font-size:13px"></div>' +
 
-      '<div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end">' +
+      '<div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">' +
         '<button onclick="closeInvoiceModal()" style="padding:9px 16px">Cancel</button>' +
-        (existing ? '<button onclick="printInvoiceByNumber_(\'' + existing.invoiceNumber + '\')" style="padding:9px 16px">Print</button>' : '') +
-        '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',' + (existing ? '\'' + existing.invoiceNumber + '\'' : 'null') + ')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">' +
-          (existing ? 'Save Changes' : 'Create') + '</button>' +
+        (existing ? '<button onclick="printInvoiceByNumber_(\'' + (existing.invoiceNumber || existing.proformaNumber) + '\')" style="padding:9px 16px">Print</button>' : '') +
+        (existing && existing.documentType === 'Proforma'
+          ? '<button onclick="convertProformaToInvoiceAction_(\'' + existing.proformaNumber + '\')" style="padding:9px 16px;background:#0a6b3d;color:#fff;border:none;border-radius:5px;font-weight:600">Convert to Invoice</button>'
+          : '') +
+        (existing
+          ? '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',\'' + (existing.invoiceNumber || existing.proformaNumber) + '\')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save Changes</button>'
+          : '<button onclick="saveAsProforma_(' + (rowId?'\''+rowId+'\'':'null') + ')" style="padding:9px 16px">Save as Proforma</button>' +
+            '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',null)" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Create Invoice</button>') +
       '</div>' +
     '</div></div>';
 
@@ -2381,6 +2392,31 @@ async function saveInvoice_(rowId, invoiceNumber){
     if (activeTab === 'dsrTab') await loadAndRenderDsr(); else await refreshFromSheet(false);
   }catch(err){
     alert('Could not save this entry.\n\n' + (err.message || err));
+  }
+}
+
+async function saveAsProforma_(rowId){
+  const fields = readInvoiceFormFields_();
+  ['pricePerNight','markupPerNight','commission','taxPercent','serviceCharge','reward','gstPercent','roe','adults','children']
+    .forEach(k => { if (fields[k] === '') delete fields[k]; });
+  try{
+    await apiPost({ action:'createProforma', rowId:rowId, fields:fields, actor:currentUser });
+    closeInvoiceModal();
+    if (activeTab === 'dsrTab') await loadAndRenderDsr(); else await refreshFromSheet(false);
+  }catch(err){
+    alert('Could not save this Proforma.\n\n' + (err.message || err));
+  }
+}
+
+async function convertProformaToInvoiceAction_(proformaNumber){
+  if (!confirm('Convert ' + proformaNumber + ' into a real Invoice? This hands out a real Invoice Number and can\'t be undone.')) return;
+  try{
+    const result = await apiPost({ action:'convertProformaToInvoice', proformaNumber:proformaNumber, actor:currentUser });
+    closeInvoiceModal();
+    if (activeTab === 'dsrTab') await loadAndRenderDsr(); else await refreshFromSheet(false);
+    alert('Converted to Invoice ' + result.invoiceNumber + '.');
+  }catch(err){
+    alert('Could not convert to Invoice.\n\n' + (err.message || err));
   }
 }
 
@@ -3129,6 +3165,78 @@ function closeCvDetailModal_(){
   overlay.innerHTML = '';
 }
 
+/* ---------------------------------------------------------------------
+   CREDIT NOTE — a direct amount + reason issued against a real Invoice.
+   Deliberately a much smaller form than the full DSR entry modal (see
+   handleCreateCreditNote_ in Code.gs for why) — it isn't re-derived from
+   room-rate pricing, so there's no Sections 1-6 to fill out again.
+   --------------------------------------------------------------------- */
+
+async function openCreateCreditNoteModal_(referenceInvoiceNumber){
+  try{
+    const json = await apiGet({ action:'dsr' });
+    const original = (json.invoices || []).find(inv => inv.invoiceNumber === referenceInvoiceNumber);
+    if (!original) { alert('Could not find that invoice — try refreshing.'); return; }
+    openCreditNoteModal_(null, original);
+  }catch(err){
+    alert('Could not load invoice.\n\n' + (err.message || err));
+  }
+}
+
+function openCreditNoteModal_(existing, referenceInvoiceData){
+  const v = existing || {};
+  const displaySource = existing || referenceInvoiceData;
+  const refInvoiceNumber = existing ? existing.referenceInvoiceNumber : referenceInvoiceData.invoiceNumber;
+  const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
+  overlay.innerHTML =
+    '<div style="max-width:480px;margin:30px auto;background:#fff;border-radius:10px;padding:22px">' +
+      '<h2 style="margin-top:0;color:#003366">' + (existing ? 'Credit Note ' + escapeHtml(existing.creditNoteNumber) : 'New Credit Note') + '</h2>' +
+      cvFieldRow_('Reference Invoice Number', '<input disabled value="' + escapeHtml(refInvoiceNumber||'') + '" style="width:100%;padding:6px;background:#f2f4f6;box-sizing:border-box">') +
+      cvFieldRow_('Client', '<input disabled value="' + escapeHtml(displaySource.client||'') + '" style="width:100%;padding:6px;background:#f2f4f6;box-sizing:border-box">') +
+      cvFieldRow_('Hotel Name', '<input disabled value="' + escapeHtml(displaySource.hotelName||'') + '" style="width:100%;padding:6px;background:#f2f4f6;box-sizing:border-box">') +
+      cvFieldRow_('Guest Name', '<input disabled value="' + escapeHtml(displaySource.guestName||'') + '" style="width:100%;padding:6px;background:#f2f4f6;box-sizing:border-box">') +
+      cvFieldRow_('Credit Amount (' + escapeHtml(displaySource.settlementCurrency || displaySource.currency || 'INR') + ')',
+        '<input type="number" step="0.01" id="cn_creditAmount" value="' + escapeHtml(String(v.creditAmount ?? '')) + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+      cvFieldRow_('Credit Reason', '<textarea id="cn_creditReason" rows="2" style="width:100%;padding:6px;box-sizing:border-box">' + escapeHtml(v.creditReason||'') + '</textarea>') +
+      cvFieldRow_('Sales Person', '<input id="cn_salesPerson" value="' + escapeHtml(v.salesPerson || displaySource.salesPerson || '') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+      cvFieldRow_('Remarks', '<textarea id="cn_remarks" rows="2" style="width:100%;padding:6px;box-sizing:border-box">' + escapeHtml(v.remarks||'') + '</textarea>') +
+      '<div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">' +
+        '<button onclick="closeCreditNoteModal_()" style="padding:9px 16px">Cancel</button>' +
+        '<button onclick="saveCreditNote_(' + (existing ? '\'' + existing.creditNoteNumber + '\'' : 'null') + ',\'' + refInvoiceNumber + '\')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save</button>' +
+      '</div>' +
+    '</div>';
+  overlay.style.display = 'block';
+}
+
+async function saveCreditNote_(existingCreditNoteNumber, referenceInvoiceNumber){
+  const val = id => document.getElementById(id).value;
+  const fields = {
+    referenceInvoiceNumber: referenceInvoiceNumber,
+    creditAmount: val('cn_creditAmount'),
+    creditReason: val('cn_creditReason'),
+    salesPerson: val('cn_salesPerson'),
+    remarks: val('cn_remarks')
+  };
+  if (fields.creditAmount === '') { alert('Credit Amount is required.'); return; }
+  try{
+    if (existingCreditNoteNumber) {
+      await apiPost({ action:'updateInvoice', invoiceNumber:existingCreditNoteNumber, fields:fields, actor:currentUser });
+    } else {
+      await apiPost({ action:'createCreditNote', fields:fields, actor:currentUser });
+    }
+    closeCreditNoteModal_();
+    await loadAndRenderDsr();
+  }catch(err){
+    alert('Could not save Credit Note.\n\n' + (err.message || err));
+  }
+}
+
+function closeCreditNoteModal_(){
+  const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
+  overlay.style.display = 'none';
+  overlay.innerHTML = '';
+}
+
 /* Bulk paste import — still the fast path for loading hundreds at once.
    Clients: Name, Sales Person, Service Charge, Address, City, State,
    Country, GST Number, PAN Number, Contact Person, Email, Phone.
@@ -3197,7 +3305,7 @@ function closeChargeLabelDefaultsModal(){
 
 // [key, label, default width px, default visible]
 const DSR_COLUMNS_ = [
-  ['invoiceNumber','Invoice #',110,true], ['billingType','Billing',80,true],
+  ['docNumber','Document #',120,true], ['documentType','Type',90,true], ['billingType','Billing',80,true],
   ['client','Client',120,true], ['vendorName','Vendor',110,false], ['hotelName','Hotel',130,true],
   ['guestName','Guest',130,true], ['checkin','Check In',95,true], ['checkout','Check Out',95,true],
   ['nights','Nights',60,true], ['city','City',100,true], ['country','Country',100,false],
@@ -3212,6 +3320,7 @@ const DSR_COLUMNS_ = [
   ['gstAmount','GST Amt',90,false], ['totalBilled','Total Billed',110,true], ['totalBilledINR','Total (INR)',110,false],
   ['totalAmount','Total Amount',130,true], ['settlementCurrency','Settlement Ccy',100,false],
   ['profit','Profit',95,true], ['profitPercent','Profit %',80,true],
+  ['referenceInvoiceNumber','Ref. Invoice #',110,false], ['creditAmount','Credit Amount',105,false], ['creditReason','Credit Reason',150,false],
   ['salesPerson','Sales Person',110,false], ['branch','Branch',90,false],
   ['createdBy','Created By',100,false], ['createdAt','Created At',130,false]
 ];
@@ -3251,6 +3360,8 @@ function dsrColumnLabel_(key){
 
 function dsrCellValue_(row, key){
   if (key === 'checkin' || key === 'checkout' || key === 'createdAt') return toDisplayDate(row[key]) || row[key] || '';
+  if (key === 'docNumber') return row.invoiceNumber || row.proformaNumber || row.creditNoteNumber || '';
+  if (key === 'documentType') return row.documentType || 'Invoice'; // rows from before this feature have no Document Type — they're all real Invoices
   if (key === 'totalAmount') return (Number(row.totalAmount)||0).toFixed(2) + ' ' + (row.settlementCurrency || row.currency || 'INR');
   if (typeof row[key] === 'number') return row[key].toFixed(2).replace(/\.00$/,'');
   return row[key] != null ? row[key] : '';
@@ -3274,7 +3385,7 @@ function renderDsrTable_(){
   const empty = document.getElementById('dsrEmpty');
   const visibleCols = window._dsrColumnLayout.filter(c => c.visible);
 
-  headRow.innerHTML = visibleCols.map(c => '<th style="width:' + c.width + 'px;max-width:' + c.width + 'px;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(dsrColumnLabel_(c.key)) + '</th>').join('') + '<th style="width:220px">Actions</th>';
+  headRow.innerHTML = visibleCols.map(c => '<th style="width:' + c.width + 'px;max-width:' + c.width + 'px;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(dsrColumnLabel_(c.key)) + '</th>').join('') + '<th style="width:260px">Actions</th>';
 
   if (!window._dsrRows.length) {
     body.innerHTML = '';
@@ -3285,12 +3396,25 @@ function renderDsrTable_(){
 
   body.innerHTML = window._dsrRows.map(row => {
     const cells = visibleCols.map(c => '<td style="max-width:' + c.width + 'px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(String(dsrCellValue_(row, c.key))) + '</td>').join('');
+    const docNumber = dsrCellValue_(row, 'docNumber');
+    const docType = dsrCellValue_(row, 'documentType');
+
+    let typeActions = '';
+    if (docType === 'Invoice') {
+      typeActions =
+        '<button onclick="duplicateInvoiceAction_(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Duplicate</button> ' +
+        '<button onclick="printInvoiceByNumber_(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Print</button> ' +
+        '<button onclick="openCreateCreditNoteModal_(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Credit Note</button> ';
+    } else if (docType === 'Proforma') {
+      typeActions =
+        '<button onclick="convertProformaToInvoiceAction_(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px;background:#0a6b3d;color:#fff;border:none;border-radius:4px">Convert to Invoice</button> ';
+    }
+
     const actions =
       '<td>' +
-        '<button onclick="openInvoiceModalForNumber(\'' + row.invoiceNumber + '\')" style="padding:4px 8px;font-size:12px">Edit</button> ' +
-        '<button onclick="duplicateInvoiceAction_(\'' + row.invoiceNumber + '\')" style="padding:4px 8px;font-size:12px">Duplicate</button> ' +
-        '<button onclick="printInvoiceByNumber_(\'' + row.invoiceNumber + '\')" style="padding:4px 8px;font-size:12px">Print</button> ' +
-        '<button onclick="deleteInvoiceAction_(\'' + row.invoiceNumber + '\')" style="padding:4px 8px;font-size:12px">Delete</button>' +
+        '<button onclick="openInvoiceModalForNumber(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Edit</button> ' +
+        typeActions +
+        '<button onclick="deleteInvoiceAction_(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Delete</button>' +
       '</td>';
     return '<tr>' + cells + actions + '</tr>';
   }).join('');
@@ -3306,10 +3430,10 @@ async function duplicateInvoiceAction_(invoiceNumber){
   }
 }
 
-async function deleteInvoiceAction_(invoiceNumber){
-  if (!confirm('Delete ' + invoiceNumber + '? This cannot be undone.')) return;
+async function deleteInvoiceAction_(documentNumber){
+  if (!confirm('Delete ' + documentNumber + '? This cannot be undone.')) return;
   try{
-    await apiPost({ action:'deleteInvoice', invoiceNumber:invoiceNumber, actor:currentUser });
+    await apiPost({ action:'deleteInvoice', invoiceNumber:documentNumber, actor:currentUser });
     await loadAndRenderDsr();
   }catch(err){
     alert('Could not delete.\n\n' + (err.message || err));
