@@ -3305,7 +3305,9 @@ function closeChargeLabelDefaultsModal(){
 
 // [key, label, default width px, default visible]
 const DSR_COLUMNS_ = [
-  ['docNumber','Document #',120,true], ['documentType','Type',90,true], ['billingType','Billing',80,true],
+  ['docNumber','Document #',120,true], ['documentType','Type',90,true],
+  ['linkedCreditNotes','Credit Note(s)',130,true],
+  ['billingType','Billing',80,true],
   ['client','Client',120,true], ['vendorName','Vendor',110,false], ['hotelName','Hotel',130,true],
   ['guestName','Guest',130,true], ['checkin','Check In',95,true], ['checkout','Check Out',95,true],
   ['nights','Nights',60,true], ['city','City',100,true], ['country','Country',100,false],
@@ -3362,6 +3364,13 @@ function dsrCellValue_(row, key){
   if (key === 'checkin' || key === 'checkout' || key === 'createdAt') return toDisplayDate(row[key]) || row[key] || '';
   if (key === 'docNumber') return row.invoiceNumber || row.proformaNumber || row.creditNoteNumber || '';
   if (key === 'documentType') return row.documentType || 'Invoice'; // rows from before this feature have no Document Type — they're all real Invoices
+  if (key === 'linkedCreditNotes') {
+    if (!row.invoiceNumber) return ''; // only real Invoices can have a Credit Note against them
+    return window._dsrRows
+      .filter(r => r.documentType === 'Credit Note' && r.referenceInvoiceNumber === row.invoiceNumber)
+      .map(r => r.creditNoteNumber)
+      .join(', ');
+  }
   if (key === 'totalAmount') return (Number(row.totalAmount)||0).toFixed(2) + ' ' + (row.settlementCurrency || row.currency || 'INR');
   if (typeof row[key] === 'number') return row[key].toFixed(2).replace(/\.00$/,'');
   return row[key] != null ? row[key] : '';
