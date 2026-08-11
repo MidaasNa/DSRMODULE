@@ -2216,7 +2216,10 @@ function renderInvoiceModal_(rowId, rec, existing){
             invoiceFieldRow_('Commission % (from hotel, pre-tax)', '<input type="number" step="0.01" id="inv_commission" value="' + escapeHtml(String(v.commission ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Service Charge', '<input type="number" step="0.01" id="inv_serviceCharge" value="' + escapeHtml(String(v.serviceCharge ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Rewards (optional)', '<input type="number" step="0.01" id="inv_reward" value="' + escapeHtml(String(v.reward ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Confirmation Number', '<input id="inv_confirmationNumber" value="' + escapeHtml(v.confirmationNumber || (rec&&rec.confirmationNumber) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+            invoiceFieldRow_('Confirmation Number', '<div style="display:flex;gap:6px">' +
+              '<input id="inv_confirmationNumber" value="' + escapeHtml(v.confirmationNumber || (rec&&rec.confirmationNumber) || '') + '" style="flex:1;padding:5px;box-sizing:border-box">' +
+              '<button type="button" onclick="validateConfirmationNumber_(\'' + (existing ? existing.invoiceNumber || '' : '') + '\')" style="padding:5px 10px;font-size:12px;white-space:nowrap">Validate</button>' +
+            '</div>') +
             invoiceFieldRow_('Sales Person Name', '<input id="inv_salesPerson" value="' + escapeHtml(v.salesPerson || (rec&&rec.handled) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
           '</div>' +
           invoiceFieldRow_('Remarks', '<textarea id="inv_remarks" rows="2" style="width:100%;padding:5px;box-sizing:border-box">' + escapeHtml(v.remarks || (rec&&rec.remarks) || '') + '</textarea>') +
@@ -2267,6 +2270,29 @@ async function loadLinkedCreditNotes_(invoiceNumber){
     el.value = notes.length ? notes.map(n => n.creditNoteNumber).join(', ') : 'None';
   }catch(err){
     el.value = 'Could not check';
+  }
+}
+
+/* Checks whether any OTHER invoice already has this Confirmation Number
+   — via the lean ?checkConfirmationNumber lookup (scans one column
+   across the sheet, not the whole dataset), so this stays fast even
+   with thousands of invoices. currentInvoiceNumber lets an existing
+   invoice skip matching itself. */
+async function validateConfirmationNumber_(currentInvoiceNumber){
+  const el = document.getElementById('inv_confirmationNumber');
+  const value = el ? el.value.trim() : '';
+  if (!value) { alert('Enter a Confirmation Number first.'); return; }
+  try{
+    const json = await apiGet({ action:'checkConfirmationNumber', confirmationNumber:value, excludeInvoiceNumber:currentInvoiceNumber || '' });
+    const matches = json.matches || [];
+    if (!matches.length) {
+      alert('No other invoice has this Confirmation Number.');
+    } else {
+      alert('This Confirmation Number is already used by:\n\n' +
+        matches.map(m => m.invoiceNumber + ' — ' + (m.client||'') + (m.hotelName ? ' / ' + m.hotelName : '')).join('\n'));
+    }
+  }catch(err){
+    alert('Could not check.\n\n' + (err.message || err));
   }
 }
 
