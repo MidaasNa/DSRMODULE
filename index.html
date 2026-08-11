@@ -2148,10 +2148,13 @@ function renderInvoiceModal_(rowId, rec, existing){
       '<div id="invoiceFormContent" style="flex:1;min-width:0;padding:18px 22px;overflow:auto;max-height:94vh">' +
       '<h2 style="margin:0 0 10px;color:#003366;font-size:20px">' + (existing ? (existing.documentType || 'Invoice') + ' ' + escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') : 'New DSR Entry') + '</h2>' +
 
-      '<div style="max-width:300px;margin-bottom:14px">' +
+      '<div style="max-width:640px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:0 10px">' +
         invoiceFieldRow_('Branch', '<select id="inv_branch" style="width:100%;padding:5px" onchange="onInvoiceBranchChange_()">' +
           '<option value="">— Select Branch —</option>' +
           knownBranches_().map(b => '<option' + ((v.branch || (rec&&rec.branch) || currentUser.branch)===b?' selected':'') + '>' + escapeHtml(b) + '</option>').join('') + '</select>') +
+        ((existing && (existing.documentType || 'Invoice') === 'Invoice' && existing.invoiceNumber)
+          ? invoiceFieldRow_('Credit Note Number', '<input disabled id="inv_creditNoteLookup" value="Checking…" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">')
+          : '') +
       '</div>' +
 
       '<div style="display:grid;grid-template-columns:1fr;gap:0;align-items:start;max-width:640px">' +
@@ -2246,6 +2249,25 @@ function renderInvoiceModal_(rowId, rec, existing){
   renderVoucherPanel_();
   refreshClientDatalist_();
   recalcInvoiceTotals_();
+  if (existing && (existing.documentType || 'Invoice') === 'Invoice' && existing.invoiceNumber) {
+    loadLinkedCreditNotes_(existing.invoiceNumber);
+  }
+}
+
+/* Populates the Credit Note Number field next to Branch — fetched via
+   the lean ?referenceInvoiceNumber= lookup (not the full DSR list),
+   since this runs every time an invoice is opened and the sheet can
+   have thousands of rows. */
+async function loadLinkedCreditNotes_(invoiceNumber){
+  const el = document.getElementById('inv_creditNoteLookup');
+  if (!el) return;
+  try{
+    const json = await apiGet({ action:'dsr', referenceInvoiceNumber: invoiceNumber });
+    const notes = json.invoices || [];
+    el.value = notes.length ? notes.map(n => n.creditNoteNumber).join(', ') : 'None';
+  }catch(err){
+    el.value = 'Could not check';
+  }
 }
 
 function renderChargesRows_(){
