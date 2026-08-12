@@ -2149,7 +2149,7 @@ function renderInvoiceModal_(rowId, rec, existing){
       '<h2 style="margin:0 0 10px;color:#003366;font-size:20px">' + (existing ? (existing.documentType || 'Invoice') + ' ' + escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') : 'New DSR Entry') + '</h2>' +
 
       '<div style="max-width:640px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:0 10px">' +
-        invoiceFieldRow_('Branch', '<select id="inv_branch" style="width:100%;padding:5px" onchange="onInvoiceBranchChange_()">' +
+        invoiceFieldRow_('Branch *', '<select id="inv_branch" style="width:100%;padding:5px" onchange="onInvoiceBranchChange_()">' +
           '<option value="">— Select Branch —</option>' +
           knownBranches_().map(b => '<option' + ((v.branch || (rec&&rec.branch) || currentUser.branch)===b?' selected':'') + '>' + escapeHtml(b) + '</option>').join('') + '</select>') +
         ((existing && (existing.documentType || 'Invoice') === 'Invoice' && existing.invoiceNumber)
@@ -2165,64 +2165,64 @@ function renderInvoiceModal_(rowId, rec, existing){
             invoiceFieldRow_('Billing Type', '<select id="inv_billingType" style="width:100%;padding:5px" ' + (existing?'disabled':'') + ' onchange="onInvoiceBranchChange_();recalcInvoiceTotals_()">' +
               ['DIRECT','BTC'].map(o => '<option' + (v.billingType===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
             invoiceFieldRow_((existing && existing.documentType === 'Proforma') ? 'Proforma Number' : 'Invoice Number', '<input disabled value="' + (existing ? escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') : 'Generated on Create/Save as Proforma') + '" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
-            invoiceFieldRow_('Client Name', '<input id="inv_client" list="inv_clientsDatalist" value="' + escapeHtml(v.client || (rec&&rec.client) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onClientNameInput_()">' +
+            invoiceFieldRow_('Client Name *', '<input id="inv_client" list="inv_clientsDatalist" value="' + escapeHtml(v.client || (rec&&rec.client) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onClientNameInput_()">' +
               '<datalist id="inv_clientsDatalist"></datalist>') +
-            invoiceFieldRow_('Vendor Name', '<input id="inv_vendorName" list="inv_vendorsDatalist" value="' + escapeHtml(v.vendorName || (rec&&rec.vendor) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onVendorNameInput_()">' +
+            invoiceFieldRow_('Vendor Name *', '<input id="inv_vendorName" list="inv_vendorsDatalist" value="' + escapeHtml(v.vendorName || (rec&&rec.vendor) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onVendorNameInput_()">' +
               '<datalist id="inv_vendorsDatalist">' + window._vendorsList.map(vd => '<option value="' + escapeHtml(vd.name) + '">').join('') + '</datalist>') +
-            invoiceFieldRow_('Hotel Name', '<input id="inv_hotelName" value="' + escapeHtml(v.hotelName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('Guest Name', '<input id="inv_guestName" value="' + escapeHtml(v.guestName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+            invoiceFieldRow_('Hotel Name *', '<input id="inv_hotelName" value="' + escapeHtml(v.hotelName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+            invoiceFieldRow_('Guest Name *', '<input id="inv_guestName" value="' + escapeHtml(v.guestName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
           '</div>' +
 
           invoiceSectionHeader_('2. Stay Details') +
           '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
-            invoiceFieldRow_('Check In', '<input type="date" id="inv_checkin" value="' + escapeHtml(checkin) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Check Out', '<input type="date" id="inv_checkout" value="' + escapeHtml(checkout) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+            invoiceFieldRow_('Check In *', '<input type="date" id="inv_checkin" value="' + escapeHtml(checkin) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+            invoiceFieldRow_('Check Out *', '<input type="date" id="inv_checkout" value="' + escapeHtml(checkout) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Nights (auto)', '<input disabled id="inv_nightsDisplay" value="" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
-            invoiceFieldRow_('Booking Given By', '<input id="inv_bookingGivenBy" value="' + escapeHtml(v.bookingGivenBy||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('City', '<input id="inv_city" value="' + escapeHtml(v.city || (rec&&rec.city) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('Country', '<input id="inv_country" value="' + escapeHtml(v.country || (rec&&rec.country) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('Hotel Chain', '<select id="inv_hotelChain" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_hotelChainOther\').style.display=this.value===\'Other\'?\'block\':\'none\'">' +
+            invoiceFieldRow_('Booking Given By *', '<input id="inv_bookingGivenBy" value="' + escapeHtml(v.bookingGivenBy||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+            invoiceFieldRow_('City *', '<input id="inv_city" value="' + escapeHtml(v.city || (rec&&rec.city) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+            invoiceFieldRow_('Country *', '<input id="inv_country" value="' + escapeHtml(v.country || (rec&&rec.country) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+            invoiceFieldRow_('Hotel Chain *', '<select id="inv_hotelChain" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_hotelChainOther\').style.display=this.value===\'Other\'?\'block\':\'none\'">' +
               HOTEL_CHAINS_.map(o => '<option' + (v.hotelChain===o?' selected':'') + '>' + o + '</option>').join('') + '</select>' +
               '<input id="inv_hotelChainOther" placeholder="Enter hotel chain" value="' + (HOTEL_CHAINS_.indexOf(v.hotelChain)===-1?escapeHtml(v.hotelChain||''):'') + '" style="width:100%;padding:5px;margin-top:3px;box-sizing:border-box;display:' + (v.hotelChain && HOTEL_CHAINS_.indexOf(v.hotelChain)===-1 ? 'block':'none') + '">') +
           '</div>' +
 
           invoiceSectionHeader_('3. Occupancy') +
           '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
-            invoiceFieldRow_('Adults', '<input type="number" id="inv_adults" value="' + escapeHtml(String(v.adults ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+            invoiceFieldRow_('Adults *', '<input type="number" id="inv_adults" value="' + escapeHtml(String(v.adults ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box">') +
             invoiceFieldRow_('Children', '<input type="number" id="inv_children" value="' + escapeHtml(String(v.children ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('Room Type', '<input id="inv_roomType" value="' + escapeHtml(v.roomType||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+            invoiceFieldRow_('Room Type *', '<input id="inv_roomType" value="' + escapeHtml(v.roomType||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
           '</div>' +
         '</div>' +
 
         '<div>' +
           invoiceSectionHeader_('4. Pricing') +
           '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
-            invoiceFieldRow_('Price Per Night', '<input type="number" step="0.01" id="inv_pricePerNight" value="' + escapeHtml(String(v.pricePerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Markup Per Night', '<input type="number" step="0.01" id="inv_markupPerNight" value="' + escapeHtml(String(v.markupPerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+            invoiceFieldRow_('Price Per Night *', '<input type="number" step="0.01" id="inv_pricePerNight" value="' + escapeHtml(String(v.pricePerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+            invoiceFieldRow_('Markup Per Night *', '<input type="number" step="0.01" id="inv_markupPerNight" value="' + escapeHtml(String(v.markupPerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Currency', '<select id="inv_currency" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_roe\').value = this.value===\'INR\'?1:document.getElementById(\'inv_roe\').value; recalcInvoiceTotals_()">' +
               CURRENCIES_.map(c => '<option' + ((v.currency||'INR')===c?' selected':'') + '>' + c + '</option>').join('') + '</select>') +
-            invoiceFieldRow_('ROE (Rate of Exchange)', '<input type="number" step="0.0001" id="inv_roe" value="' + escapeHtml(String(v.roe ?? 1)) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+            invoiceFieldRow_('ROE (Rate of Exchange) *', '<input type="number" step="0.0001" id="inv_roe" value="' + escapeHtml(String(v.roe ?? 1)) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
           '</div>' +
 
           invoiceSectionHeader_('5. Billing') +
           '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
-            invoiceFieldRow_('Billing Instructions', '<select id="inv_billingInstruction" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_billingInstructionOther\').style.display=this.value===\'Other\'?\'block\':\'none\';recalcInvoiceTotals_()">' +
+            invoiceFieldRow_('Billing Instructions *', '<select id="inv_billingInstruction" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_billingInstructionOther\').style.display=this.value===\'Other\'?\'block\':\'none\';recalcInvoiceTotals_()">' +
               BILLING_INSTRUCTIONS_.map(o => '<option' + (v.billingInstruction===o?' selected':'') + '>' + o + '</option>').join('') + '</select>' +
               '<input id="inv_billingInstructionOther" placeholder="Enter billing instruction" value="' + (BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1?escapeHtml(v.billingInstruction||''):'') + '" style="width:100%;padding:5px;margin-top:3px;box-sizing:border-box;display:' + (v.billingInstruction && BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1 ? 'block':'none') + '" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('GST Billed to Client', '<select id="inv_gstBilled" style="width:100%;padding:5px" onchange="recalcInvoiceTotals_()">' +
+            invoiceFieldRow_('GST Billed to Client *', '<select id="inv_gstBilled" style="width:100%;padding:5px" onchange="recalcInvoiceTotals_()">' +
               ['No','Yes'].map(o => '<option' + ((v.gstBilled||'No')===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
-            invoiceFieldRow_('GST % (if billed)', '<input type="number" step="0.01" id="inv_gstPercent" value="' + escapeHtml(String(v.gstPercent ?? 18)) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Tax Charged by Hotel (%)', '<input type="number" step="0.01" id="inv_taxPercent" value="' + escapeHtml(String(v.taxPercent ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Commission % (from hotel, pre-tax)', '<input type="number" step="0.01" id="inv_commission" value="' + escapeHtml(String(v.commission ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Service Charge', '<input type="number" step="0.01" id="inv_serviceCharge" value="' + escapeHtml(String(v.serviceCharge ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+            invoiceFieldRow_('GST % (if billed) *', '<input type="number" step="0.01" id="inv_gstPercent" value="' + escapeHtml(String(v.gstPercent ?? 18)) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+            invoiceFieldRow_('Tax Charged by Hotel (%) *', '<input type="number" step="0.01" id="inv_taxPercent" value="' + escapeHtml(String(v.taxPercent ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+            invoiceFieldRow_('Commission % (from hotel, pre-tax) *', '<input type="number" step="0.01" id="inv_commission" value="' + escapeHtml(String(v.commission ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+            invoiceFieldRow_('Service Charge *', '<input type="number" step="0.01" id="inv_serviceCharge" value="' + escapeHtml(String(v.serviceCharge ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Rewards (optional)', '<input type="number" step="0.01" id="inv_reward" value="' + escapeHtml(String(v.reward ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Confirmation Number', '<div style="display:flex;gap:6px">' +
+            invoiceFieldRow_('Confirmation Number *', '<div style="display:flex;gap:6px">' +
               '<input id="inv_confirmationNumber" value="' + escapeHtml(v.confirmationNumber || (rec&&rec.confirmationNumber) || '') + '" style="flex:1;padding:5px;box-sizing:border-box">' +
               '<button type="button" onclick="validateConfirmationNumber_(\'' + (existing ? existing.invoiceNumber || '' : '') + '\')" style="padding:5px 10px;font-size:12px;white-space:nowrap">Validate</button>' +
             '</div>') +
-            invoiceFieldRow_('Sales Person Name', '<input id="inv_salesPerson" value="' + escapeHtml(v.salesPerson || (rec&&rec.handled) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+            invoiceFieldRow_('Sales Person Name *', '<input id="inv_salesPerson" value="' + escapeHtml(v.salesPerson || (rec&&rec.handled) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
           '</div>' +
-          invoiceFieldRow_('Remarks', '<textarea id="inv_remarks" rows="2" style="width:100%;padding:5px;box-sizing:border-box">' + escapeHtml(v.remarks || (rec&&rec.remarks) || '') + '</textarea>') +
+          invoiceFieldRow_('Remarks *', '<textarea id="inv_remarks" rows="2" style="width:100%;padding:5px;box-sizing:border-box">' + escapeHtml(v.remarks || (rec&&rec.remarks) || '') + '</textarea>') +
 
           invoiceSectionHeader_('6. Custom Charges') +
           '<div style="font-size:11px;color:#8a93a0;margin-bottom:6px">Remarks only — doesn\'t affect Selling Price, Total Billed, or Profit. Use Service Charge above for anything that needs to actually be billed.</div>' +
@@ -2426,7 +2426,51 @@ function recalcInvoiceTotals_(){
     '<span style="color:#4a5560">Commission (from hotel): ' + t.commissionAmount.toFixed(2) + ' &nbsp;·&nbsp; Profit: ' + t.profit.toFixed(2) + ' (' + t.profitPercent.toFixed(1) + '%)</span>';
 }
 
+// Every field is mandatory except Children and Rewards (and Custom
+// Charges — that's a free-form remarks table, not a single value, so
+// there's nothing sensible to "require" there). Checked as plain
+// non-empty here rather than via HTML5 required attributes, since two
+// fields (Hotel Chain / Billing Instructions "Other") only need to be
+// filled conditionally, and a single consolidated message listing
+// everything missing at once is clearer than one native bubble at a time.
+const INVOICE_REQUIRED_FIELDS_ = [
+  ['inv_branch','Branch'], ['inv_client','Client Name'], ['inv_vendorName','Vendor Name'],
+  ['inv_hotelName','Hotel Name'], ['inv_guestName','Guest Name'],
+  ['inv_checkin','Check In'], ['inv_checkout','Check Out'], ['inv_bookingGivenBy','Booking Given By'],
+  ['inv_city','City'], ['inv_country','Country'],
+  ['inv_adults','Adults'], ['inv_roomType','Room Type'],
+  ['inv_pricePerNight','Price Per Night'], ['inv_markupPerNight','Markup Per Night'], ['inv_roe','ROE'],
+  ['inv_gstPercent','GST %'], ['inv_taxPercent','Tax Charged by Hotel (%)'],
+  ['inv_commission','Commission %'], ['inv_serviceCharge','Service Charge'],
+  ['inv_confirmationNumber','Confirmation Number'], ['inv_salesPerson','Sales Person Name'],
+  ['inv_remarks','Remarks']
+];
+
+function validateInvoiceFormRequired_(){
+  const missing = [];
+  INVOICE_REQUIRED_FIELDS_.forEach(([id,label]) => {
+    const el = document.getElementById(id);
+    if (el && String(el.value).trim() === '') missing.push(label);
+  });
+  const hotelChainEl = document.getElementById('inv_hotelChain');
+  const hotelChainOtherEl = document.getElementById('inv_hotelChainOther');
+  if (hotelChainEl && hotelChainEl.value === 'Other' && hotelChainOtherEl && !hotelChainOtherEl.value.trim()) {
+    missing.push('Hotel Chain (enter the name under "Other")');
+  }
+  const billingInstrEl = document.getElementById('inv_billingInstruction');
+  const billingInstrOtherEl = document.getElementById('inv_billingInstructionOther');
+  if (billingInstrEl && billingInstrEl.value === 'Other' && billingInstrOtherEl && !billingInstrOtherEl.value.trim()) {
+    missing.push('Billing Instructions (enter the value under "Other")');
+  }
+  if (missing.length) {
+    alert('Please fill in the following required fields before saving:\n\n' + missing.map(m => '• ' + m).join('\n'));
+    return false;
+  }
+  return true;
+}
+
 async function saveInvoice_(rowId, invoiceNumber){
+  if (!validateInvoiceFormRequired_()) return;
   const fields = readInvoiceFormFields_();
   ['pricePerNight','markupPerNight','commission','taxPercent','serviceCharge','reward','gstPercent','roe','adults','children']
     .forEach(k => { if (fields[k] === '') delete fields[k]; });
@@ -2444,6 +2488,7 @@ async function saveInvoice_(rowId, invoiceNumber){
 }
 
 async function saveAsProforma_(rowId){
+  if (!validateInvoiceFormRequired_()) return;
   const fields = readInvoiceFormFields_();
   ['pricePerNight','markupPerNight','commission','taxPercent','serviceCharge','reward','gstPercent','roe','adults','children']
     .forEach(k => { if (fields[k] === '') delete fields[k]; });
