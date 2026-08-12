@@ -2234,20 +2234,34 @@ function renderInvoiceModal_(rowId, rec, existing){
 
       '<div id="inv_totals" style="margin-top:14px;padding:10px 12px;background:#f7f8fa;border-radius:8px;font-size:13px"></div>' +
 
-      '<div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">' +
-        '<button onclick="closeInvoiceModal()" style="padding:9px 16px">Cancel</button>' +
-        (existing ? '<button onclick="printInvoiceByNumber_(\'' + (existing.invoiceNumber || existing.proformaNumber) + '\')" style="padding:9px 16px">Print</button>' : '') +
-        (existing && existing.documentType === 'Proforma'
-          ? '<button onclick="convertProformaToInvoiceAction_(\'' + existing.proformaNumber + '\')" style="padding:9px 16px;background:#0a6b3d;color:#fff;border:none;border-radius:5px;font-weight:600">Convert to Invoice</button>'
-          : '') +
+      '<div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">' +
         (existing
-          ? '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',\'' + (existing.invoiceNumber || existing.proformaNumber) + '\')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save Changes</button>'
-          : '<button onclick="saveAsProforma_(' + (rowId?'\''+rowId+'\'':'null') + ')" style="padding:9px 16px">Save as Proforma</button>' +
-            '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',null)" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Create Invoice</button>') +
+          ? '<div><button onclick="navigateDsrEntry_(-1)" style="padding:9px 14px">‹ Previous</button> ' +
+            '<button onclick="navigateDsrEntry_(1)" style="padding:9px 14px">Next ›</button></div>'
+          : '<div></div>') +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end">' +
+          '<button onclick="closeInvoiceModal()" style="padding:9px 16px">Cancel</button>' +
+          (existing ? '<button onclick="printInvoiceByNumber_(\'' + (existing.invoiceNumber || existing.proformaNumber) + '\')" style="padding:9px 16px">Print</button>' : '') +
+          (existing && (existing.documentType || 'Invoice') === 'Invoice'
+            ? '<button onclick="duplicateInvoiceAction_(\'' + existing.invoiceNumber + '\')" style="padding:9px 16px">Duplicate</button>' +
+              '<button onclick="openCreateCreditNoteModal_(\'' + existing.invoiceNumber + '\')" style="padding:9px 16px">Credit Note</button>'
+            : '') +
+          (existing && existing.documentType === 'Proforma'
+            ? '<button onclick="convertProformaToInvoiceAction_(\'' + existing.proformaNumber + '\')" style="padding:9px 16px;background:#0a6b3d;color:#fff;border:none;border-radius:5px;font-weight:600">Convert to Invoice</button>'
+            : '') +
+          (existing
+            ? '<button onclick="deleteInvoiceAction_(\'' + (existing.invoiceNumber || existing.proformaNumber || existing.creditNoteNumber) + '\')" style="padding:9px 16px">Delete</button>'
+            : '') +
+          (existing
+            ? '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',\'' + (existing.invoiceNumber || existing.proformaNumber) + '\')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save Changes</button>'
+            : '<button onclick="saveAsProforma_(' + (rowId?'\''+rowId+'\'':'null') + ')" style="padding:9px 16px">Save as Proforma</button>' +
+              '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',null)" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Create Invoice</button>') +
+        '</div>' +
       '</div>' +
     '</div></div>';
 
   overlay.style.display = 'block';
+  overlay.dataset.currentDocNumber = existing ? (existing.invoiceNumber || existing.proformaNumber || existing.creditNoteNumber || '') : '';
   renderChargesRows_();
   renderVoucherPanel_();
   refreshClientDatalist_();
@@ -2261,6 +2275,26 @@ function renderInvoiceModal_(rowId, rec, existing){
    the lean ?referenceInvoiceNumber= lookup (not the full DSR list),
    since this runs every time an invoice is opened and the sheet can
    have thousands of rows. */
+/* Previous/Next step through window._dsrRows in whatever order the DSR
+   grid currently has them loaded in — only available when the entry
+   being edited is actually part of that loaded list (i.e. opened from
+   the DSR tab). An entry opened from a ticket's Confirmed-tab button
+   isn't part of that list, so Previous/Next simply won't do anything
+   useful there — the buttons still show (since Prev/Next is otherwise
+   indistinguishable from "just no entries in that direction"), but a
+   missing index is treated the same as a boundary and does nothing. */
+function navigateDsrEntry_(delta){
+  const overlay = document.getElementById('invoiceModalOverlay');
+  const currentDocNumber = overlay.dataset.currentDocNumber;
+  if (!currentDocNumber || !window._dsrRows || !window._dsrRows.length) return;
+  const idx = window._dsrRows.findIndex(r => (r.invoiceNumber || r.proformaNumber || r.creditNoteNumber) === currentDocNumber);
+  if (idx === -1) return;
+  const nextIdx = idx + delta;
+  if (nextIdx < 0 || nextIdx >= window._dsrRows.length) return;
+  const nextRow = window._dsrRows[nextIdx];
+  openInvoiceModalForNumber(nextRow.invoiceNumber || nextRow.proformaNumber || nextRow.creditNoteNumber);
+}
+
 async function loadLinkedCreditNotes_(invoiceNumber){
   const el = document.getElementById('inv_creditNoteLookup');
   if (!el) return;
@@ -3487,7 +3521,7 @@ function renderDsrTable_(){
   const empty = document.getElementById('dsrEmpty');
   const visibleCols = window._dsrColumnLayout.filter(c => c.visible);
 
-  headRow.innerHTML = visibleCols.map(c => '<th style="width:' + c.width + 'px;max-width:' + c.width + 'px;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(dsrColumnLabel_(c.key)) + '</th>').join('') + '<th style="width:260px">Actions</th>';
+  headRow.innerHTML = visibleCols.map(c => '<th style="width:' + c.width + 'px;max-width:' + c.width + 'px;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(dsrColumnLabel_(c.key)) + '</th>').join('') + '<th style="width:70px">Actions</th>';
 
   if (!window._dsrRows.length) {
     body.innerHTML = '';
@@ -3499,25 +3533,8 @@ function renderDsrTable_(){
   body.innerHTML = window._dsrRows.map(row => {
     const cells = visibleCols.map(c => '<td style="max-width:' + c.width + 'px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(String(dsrCellValue_(row, c.key))) + '</td>').join('');
     const docNumber = dsrCellValue_(row, 'docNumber');
-    const docType = dsrCellValue_(row, 'documentType');
 
-    let typeActions = '';
-    if (docType === 'Invoice') {
-      typeActions =
-        '<button onclick="duplicateInvoiceAction_(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Duplicate</button> ' +
-        '<button onclick="printInvoiceByNumber_(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Print</button> ' +
-        '<button onclick="openCreateCreditNoteModal_(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Credit Note</button> ';
-    } else if (docType === 'Proforma') {
-      typeActions =
-        '<button onclick="convertProformaToInvoiceAction_(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px;background:#0a6b3d;color:#fff;border:none;border-radius:4px">Convert to Invoice</button> ';
-    }
-
-    const actions =
-      '<td>' +
-        '<button onclick="openInvoiceModalForNumber(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Edit</button> ' +
-        typeActions +
-        '<button onclick="deleteInvoiceAction_(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Delete</button>' +
-      '</td>';
+    const actions = '<td><button onclick="openInvoiceModalForNumber(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Edit</button></td>';
     return '<tr>' + cells + actions + '</tr>';
   }).join('');
 }
