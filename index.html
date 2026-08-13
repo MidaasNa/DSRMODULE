@@ -408,6 +408,7 @@ tr.overdue-row td{border-color:#f3d4c0}
   <button onclick="openInvoiceModal(null)" style="margin-left:12px">+ New Entry</button>
   <button onclick="openColumnCustomizeModal()" style="margin-left:6px">⚙ Customize Columns</button>
   <button class="manager-only" onclick="openChargeLabelDefaultsModal()" style="margin-left:6px;display:none">⚙ Manage Charge Labels</button>
+  <button class="manager-only" onclick="openBranchDetailsModal_()" style="margin-left:6px;display:none">⚙ Manage Branch Addresses</button>
   <button onclick="exportDsrToExcel()" style="margin-left:6px">⬇ Export Excel</button>
   <button onclick="exportDsrToPdf()" style="margin-left:6px">⬇ Export PDF</button>
 </p>
@@ -510,6 +511,7 @@ function enterApp(){
   loadBranchEmployees();
   loadChargeLabelDefaults();
   loadClientsAndVendors();
+  loadBranchDetails_();
   setToday();
   startAutoRefresh();
 }
@@ -1996,6 +1998,15 @@ async function loadChargeLabelDefaults(){
   }
 }
 
+async function loadBranchDetails_(){
+  try{
+    const json = await apiGet({ action:'branchDetails' });
+    window._branchDetailsList = json.branches || [];
+  }catch(err){
+    console.error('Could not load branch invoice details:', err);
+  }
+}
+
 async function loadClientsAndVendors(){
   try{
     const [clientsJson, vendorsJson] = await Promise.all([
@@ -2644,6 +2655,20 @@ function buildInvoicePrintHtml_(inv){
   const docNumberDisplay = inv.invoiceNumber || inv.proformaNumber || '';
   const title = isProforma ? 'PROFORMA INVOICE' : 'TAX INVOICE';
 
+  // Letterhead varies by branch (GST registration is state-specific) —
+  // falls back field-by-field to the hardcoded default for anything not
+  // yet configured for this branch, so an unconfigured branch still
+  // prints something sensible rather than blank fields.
+  const branchDetail = (window._branchDetailsList || []).find(b => b.branch === inv.branch) || {};
+  const company = {
+    name: branchDetail.companyName || PRINT_COMPANY_.name,
+    aka: PRINT_COMPANY_.aka,
+    addressLines: branchDetail.address ? String(branchDetail.address).split('\n').filter(l => l.trim()) : PRINT_COMPANY_.addressLines,
+    stateCode: branchDetail.stateCode || PRINT_COMPANY_.stateCode,
+    stateName: branchDetail.stateName || PRINT_COMPANY_.stateName,
+    gstin: branchDetail.gstin || PRINT_COMPANY_.gstin
+  };
+
   const esc = s => escapeHtml(String(s == null ? '' : s));
 
   return `<html><head><title>${esc(docNumberDisplay)}</title>
@@ -2665,11 +2690,11 @@ function buildInvoicePrintHtml_(inv){
   <table>
     <tr>
       <td style="width:34%">
-        <div class="bold">${esc(PRINT_COMPANY_.name)}</div>
-        <div class="small">${esc(PRINT_COMPANY_.aka)}</div>
-        ${PRINT_COMPANY_.addressLines.map(l => '<div class="small">' + esc(l) + '</div>').join('')}
-        <div style="margin-top:6px">State Code: <b>${esc(PRINT_COMPANY_.stateCode)}</b> &nbsp; GSTIN: <b>${esc(PRINT_COMPANY_.gstin)}</b></div>
-        <div>State Name: <b>${esc(PRINT_COMPANY_.stateName)}</b></div>
+        <div class="bold">${esc(company.name)}</div>
+        <div class="small">${esc(company.aka)}</div>
+        ${company.addressLines.map(l => '<div class="small">' + esc(l) + '</div>').join('')}
+        <div style="margin-top:6px">State Code: <b>${esc(company.stateCode)}</b> &nbsp; GSTIN: <b>${esc(company.gstin)}</b></div>
+        <div>State Name: <b>${esc(company.stateName)}</b></div>
       </td>
       <td style="width:32%">
         <div class="bold center">HOTEL ${esc(isProforma ? 'PROFORMA' : 'INVOICE')}</div>
@@ -3585,6 +3610,78 @@ function closeChargeLabelDefaultsModal(){
   const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
   overlay.style.display = 'none';
   overlay.innerHTML = '';
+}
+
+/* ---------------------------------------------------------------------
+   BRANCH INVOICE ADDRESSES (admin) — company name/address/State Code &
+   Name/GSTIN differ per branch (GST registration is state-specific), so
+   the printed invoice's letterhead is driven by whichever branch is set
+   on that DSR entry. A branch left unconfigured here just falls back to
+   the hardcoded default (see PRINT_COMPANY_) rather than breaking.
+   --------------------------------------------------------------------- */
+
+function openBranchDetailsModal_(){
+  const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
+  const branches = knownBranches_();
+  const rows = branches.map(b => {
+    const detail = (window._branchDetailsList || []).find(d => d.branch === b);
+    const status = detail && detail.gstin
+      ? '<span style="color:#8a93a0;font-size:11px">' + escapeHtml(detail.gstin) + '</span>'
+      : '<span style="color:#c0392b;font-size:11px">Not configured — using default letterhead</span>';
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #eee">' +
+      '<div><b>' + escapeHtml(b) + '</b><br>' + status + '</div>' +
+      '<button onclick="openBranchDetailEditModal_(\'' + encodeURIComponent(b) + '\')" style="padding:5px 12px;font-size:12px">Edit</button>' +
+    '</div>';
+  }).join('');
+
+  overlay.innerHTML =
+    '<div style="max-width:560px;margin:30px auto;background:#fff;border-radius:10px;padding:22px;max-height:85vh;overflow:auto">' +
+      '<h2 style="margin-top:0;color:#003366">Manage Branch Invoice Addresses</h2>' +
+      '<p style="color:#4a5560;font-size:13px">Each branch can have its own company name, address, State Code/Name, and GSTIN on printed invoices — needed since GST registration is state-specific. Any branch left unconfigured falls back to the default letterhead.</p>' +
+      (rows || '<p style="color:#8a93a0">No branches found yet — add people to the Users sheet with a Branch first.</p>') +
+      '<div style="margin-top:16px;display:flex;justify-content:flex-end">' +
+        '<button onclick="closeCvDetailModal_()" style="padding:9px 16px">Close</button>' +
+      '</div>' +
+    '</div>';
+  overlay.style.display = 'block';
+}
+
+function openBranchDetailEditModal_(encodedBranch){
+  const branch = decodeURIComponent(encodedBranch);
+  const existing = (window._branchDetailsList || []).find(d => d.branch === branch) || {};
+  const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
+  overlay.innerHTML =
+    '<div style="max-width:480px;margin:30px auto;background:#fff;border-radius:10px;padding:22px">' +
+      '<h2 style="margin-top:0;color:#003366">Invoice Address — ' + escapeHtml(branch) + '</h2>' +
+      cvFieldRow_('Company Name (leave blank to use the default)', '<input id="bd_companyName" value="' + escapeHtml(existing.companyName||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+      cvFieldRow_('Address (one line per row)', '<textarea id="bd_address" rows="4" style="width:100%;padding:6px;box-sizing:border-box">' + escapeHtml(existing.address||'') + '</textarea>') +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
+        cvFieldRow_('State Code', '<input id="bd_stateCode" value="' + escapeHtml(existing.stateCode||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+        cvFieldRow_('State Name', '<input id="bd_stateName" value="' + escapeHtml(existing.stateName||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+      '</div>' +
+      cvFieldRow_('GSTIN', '<input id="bd_gstin" value="' + escapeHtml(existing.gstin||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+      '<div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">' +
+        '<button onclick="openBranchDetailsModal_()" style="padding:9px 16px">Back</button>' +
+        '<button onclick="saveBranchDetail_(\'' + encodedBranch + '\')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save</button>' +
+      '</div>' +
+    '</div>';
+  overlay.style.display = 'block';
+}
+
+async function saveBranchDetail_(encodedBranch){
+  const branch = decodeURIComponent(encodedBranch);
+  const val = id => document.getElementById(id).value;
+  const detail = {
+    branch: branch, companyName: val('bd_companyName'), address: val('bd_address'),
+    stateCode: val('bd_stateCode'), stateName: val('bd_stateName'), gstin: val('bd_gstin')
+  };
+  try{
+    await apiPost({ action:'saveBranchDetail', branchDetail:detail, actor:currentUser });
+    await loadBranchDetails_();
+    openBranchDetailsModal_();
+  }catch(err){
+    alert('Could not save.\n\n' + (err.message || err));
+  }
 }
 
 /* ---------------------------------------------------------------------
