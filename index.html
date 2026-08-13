@@ -2553,20 +2553,183 @@ function closeInvoiceModal(){
   overlay.innerHTML = '';
 }
 
-function printInvoiceByNumber_(invoiceNumber){
-  const content = document.getElementById('invoiceFormContent').cloneNode(true);
-  content.querySelectorAll('button').forEach(b => b.remove());
-  content.querySelectorAll('input,select,textarea').forEach(el => {
-    const span = document.createElement('span');
-    span.textContent = el.tagName === 'SELECT' ? el.options[el.selectedIndex].text : el.value;
-    span.style.display = 'inline-block';
-    span.style.padding = '4px 0';
-    el.replaceWith(span);
-  });
-  const w = window.open('', '_blank');
-  w.document.write('<html><head><title>' + escapeHtml(invoiceNumber) + '</title></head><body>' + content.innerHTML + '</body></html>');
-  w.document.close();
-  w.print();
+/* ---------------------------------------------------------------------
+   PRINTABLE INVOICE — a proper client-facing tax invoice, modeled on
+   LGT's actual invoice format (HQ601552.pdf). Deliberately does NOT
+   show internal-only figures: Markup, Commission (what the hotel pays
+   us), Rewards, or Custom Charges — a client only ever sees one blended
+   Rate Per Night (room cost + markup, un-decomposed), plus Service
+   Charge and GST as separate lines, same as the sample.
+
+   Fetches the record fresh via the efficient single-row lookup (not the
+   modal's current in-progress form state, and not the full DSR list) —
+   this always prints exactly what's actually saved.
+   --------------------------------------------------------------------- */
+
+// Static company letterhead — taken from LGT's own sample invoice.
+// Edit these if any detail is wrong or changes.
+const PRINT_COMPANY_ = {
+  name: 'LGT GLOBAL HOSPITALITY LIMITED',
+  aka: '(FKA LGT BUSINESS CONNEXTIONS LIMITED)',
+  addressLines: ['6TH FLOOR, OFFICE NO.608, K.P. AURUM, MAROL', 'MAROSHI ROAD, K.P. AURUM BUILDING, MAROL', 'VILLAGE, MUMBAI SUBURBAN, MUMBAI - 400059', 'MAHARASHTRA, INDIA.'],
+  stateCode: '27', stateName: 'Maharashtra', gstin: '27AADCL1457C1ZT',
+  bankLines: [
+    'CASH: Payment should be made directly to the casher in our office &amp; obtained receipt.',
+    'CHEQUE: All cheques or demand drafts in payment of bills should be drawn in favor of LGT GLOBAL HOSPITALITY LIMITED',
+    'OUTSTANDING: We reserve the right to charge interest @ 24% per annum on all outstanding overdue account.',
+    '1. BANK DETAILS:: BANK OF INDIA | Branch: Mount Road, Chennai, India. | Branch Code: 8001 | IFSC: BKID0008001',
+    'SWIFT Code: BKIDNBBMTR | Account Number: 800130150000004',
+    '2. HDFC BANK | Branch: G.N.Chetty Road, T.Nagar, Chennai, Tamil Nadu, India | IFSC CODE: HDFC0000206 | SWIFT Code: HDFCINBBCHE, MICR: 600240013',
+    'EURO A/c No. 50200038595578 // USD A/c No. 50200038497644 // GBP A/c No. 50200038575294 // SGD A/c No. 50200081073044 // AUD A/c No. 50200081085332.'
+  ]
+};
+
+function numberToWordsINR_(num){
+  num = Math.round(num);
+  if (num === 0) return 'ZERO';
+  const ones = ['','ONE','TWO','THREE','FOUR','FIVE','SIX','SEVEN','EIGHT','NINE','TEN',
+    'ELEVEN','TWELVE','THIRTEEN','FOURTEEN','FIFTEEN','SIXTEEN','SEVENTEEN','EIGHTEEN','NINETEEN'];
+  const tens = ['','','TWENTY','THIRTY','FORTY','FIFTY','SIXTY','SEVENTY','EIGHTY','NINETY'];
+  const twoDigits = n => n < 20 ? ones[n] : tens[Math.floor(n/10)] + (n%10 ? ' ' + ones[n%10] : '');
+  const threeDigits = n => n < 100 ? twoDigits(n) : ones[Math.floor(n/100)] + ' HUNDRED' + (n%100 ? ' ' + twoDigits(n%100) : '');
+
+  let n = num;
+  const crore = Math.floor(n/10000000); n %= 10000000;
+  const lakh = Math.floor(n/100000); n %= 100000;
+  const thousand = Math.floor(n/1000); n %= 1000;
+  const hundred = n;
+  const parts = [];
+  if (crore) parts.push(threeDigits(crore) + ' CRORE');
+  if (lakh) parts.push(threeDigits(lakh) + ' LAKH');
+  if (thousand) parts.push(threeDigits(thousand) + ' THOUSAND');
+  if (hundred) parts.push(threeDigits(hundred));
+  return parts.join(' ');
+}
+
+async function printInvoiceByNumber_(docNumber){
+  try{
+    const json = await apiGet({ action:'invoiceByNumber', documentNumber:docNumber });
+    const inv = json.invoice;
+    if (!inv) { alert('Could not find that entry to print.'); return; }
+    if (inv.documentType === 'Credit Note') { alert('Printable Credit Note format isn\'t built yet — this covers Invoices and Proformas.'); return; }
+    const html = buildInvoicePrintHtml_(inv);
+    const w = window.open('', '_blank');
+    w.document.write(html);
+    w.document.close();
+    w.print();
+  }catch(err){
+    alert('Could not print.\n\n' + (err.message || err));
+  }
+}
+
+function buildInvoicePrintHtml_(inv){
+  const r2 = n => (Math.round((Number(n)||0) * 100) / 100).toFixed(2);
+  const roe = Number(inv.roe) || 1;
+  const nights = Number(inv.nights) || 0;
+
+  // Blended per-night rate — room cost + tax + markup, all baked into
+  // ONE number. This is the whole point: the client sees a single rate,
+  // never the cost/markup split behind it.
+  const feTotal = (Number(inv.netHotelCost)||0) + (Number(inv.totalMarkup)||0);
+  const ratePerNightFE = nights > 0 ? feTotal / nights : feTotal;
+  const lcTotal = feTotal * roe;
+  const serviceChargeLC = (Number(inv.serviceCharge)||0) * roe;
+  const gstLC = (Number(inv.gstAmount)||0) * roe;
+  const preRoundTotal = lcTotal + serviceChargeLC + gstLC;
+  const amountPayable = Math.round(preRoundTotal);
+  const roundOff = amountPayable - preRoundTotal;
+
+  const clientMaster = (window._clientsList || []).find(c => c.name === inv.client) || {};
+  const isProforma = inv.documentType === 'Proforma';
+  const docNumberDisplay = inv.invoiceNumber || inv.proformaNumber || '';
+  const title = isProforma ? 'PROFORMA INVOICE' : 'TAX INVOICE';
+
+  const esc = s => escapeHtml(String(s == null ? '' : s));
+
+  return `<html><head><title>${esc(docNumberDisplay)}</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#111;margin:24px}
+  table{border-collapse:collapse;width:100%}
+  td,th{border:1px solid #333;padding:5px 7px;vertical-align:top}
+  .noborder{border:none;padding:2px 0}
+  .center{text-align:center}
+  .right{text-align:right}
+  .bold{font-weight:bold}
+  .title{font-size:18px;font-weight:bold;text-align:center;margin:10px 0}
+  .small{font-size:10px;color:#333}
+  .boxhead{background:#f2f2f2;font-weight:bold}
+  @media print{ .noprint{display:none} }
+</style></head>
+<body>
+  <div class="title">${esc(title)}</div>
+  <table>
+    <tr>
+      <td style="width:34%">
+        <div class="bold">${esc(PRINT_COMPANY_.name)}</div>
+        <div class="small">${esc(PRINT_COMPANY_.aka)}</div>
+        ${PRINT_COMPANY_.addressLines.map(l => '<div class="small">' + esc(l) + '</div>').join('')}
+        <div style="margin-top:6px">State Code: <b>${esc(PRINT_COMPANY_.stateCode)}</b> &nbsp; GSTIN: <b>${esc(PRINT_COMPANY_.gstin)}</b></div>
+        <div>State Name: <b>${esc(PRINT_COMPANY_.stateName)}</b></div>
+      </td>
+      <td style="width:32%">
+        <div class="bold center">HOTEL ${esc(isProforma ? 'PROFORMA' : 'INVOICE')}</div>
+        <table style="border:none;margin-top:4px">
+          <tr class="noborder"><td class="noborder">${isProforma?'Proforma':'INV'} #</td><td class="noborder bold">${esc(docNumberDisplay)}</td></tr>
+          <tr class="noborder"><td class="noborder">Date</td><td class="noborder">${esc(toDisplayDate(inv.createdAt ? inv.createdAt.split(' ')[0] : '') || inv.createdAt || '')}</td></tr>
+          <tr class="noborder"><td class="noborder">Conf #</td><td class="noborder">${esc(inv.confirmationNumber)}</td></tr>
+          <tr class="noborder"><td class="noborder">Ref No.</td><td class="noborder">${esc(docNumberDisplay)}</td></tr>
+          <tr class="noborder"><td class="noborder">Bkg Given By</td><td class="noborder">${esc(inv.bookingGivenBy)}</td></tr>
+          <tr class="noborder"><td class="noborder">Sales Rep</td><td class="noborder">${esc(inv.salesPerson)}</td></tr>
+        </table>
+      </td>
+      <td style="width:34%">
+        <div class="bold">${esc(inv.client)}</div>
+        ${clientMaster.address ? '<div class="small">' + esc(clientMaster.address) + '</div>' : ''}
+        ${(clientMaster.city || clientMaster.country) ? '<div class="small">' + esc([clientMaster.city, clientMaster.country].filter(Boolean).join(', ')) + '</div>' : ''}
+        ${clientMaster.state ? '<div style="margin-top:6px">State Name: <b>' + esc(clientMaster.state) + '</b></div>' : ''}
+        ${clientMaster.gstNumber ? '<div>GSTIN: <b>' + esc(clientMaster.gstNumber) + '</b></div>' : ''}
+        ${clientMaster.panNumber ? '<div>PAN: <b>' + esc(clientMaster.panNumber) + '</b></div>' : ''}
+      </td>
+    </tr>
+  </table>
+
+  <table style="margin-top:6px">
+    <tr><td class="bold">Hotel Name: ${esc(inv.hotelName)}</td><td class="bold" style="width:25%">Country: ${esc(inv.country)}</td><td class="bold" style="width:25%">City: ${esc(inv.city)}</td></tr>
+  </table>
+
+  <table style="margin-top:6px">
+    <tr class="boxhead">
+      <td>Guest Name</td><td>No of Room</td><td>Room Type</td><td>Arrival Date</td><td>Departure Date</td>
+      <td>Cur Code</td><td>No of Night</td><td>Rate Per Night</td><td>Total In FE</td><td>ROE</td><td>Total Amount LC</td>
+    </tr>
+    <tr>
+      <td>${esc(inv.guestName)}</td><td class="center">1</td><td>${esc(inv.roomType)}</td>
+      <td>${esc(toDisplayDate(inv.checkin) || inv.checkin)}</td><td>${esc(toDisplayDate(inv.checkout) || inv.checkout)}</td>
+      <td class="center">${esc(inv.currency||'INR')}</td><td class="center">${nights}</td>
+      <td class="right">${r2(ratePerNightFE)}</td><td class="right">${r2(feTotal)}</td><td class="right">${r2(roe)}</td><td class="right">${r2(lcTotal)}</td>
+    </tr>
+  </table>
+
+  <table style="margin-top:6px">
+    <tr><td style="width:60%">HSN 998559</td><td class="right bold">TOTAL:</td><td class="right" style="width:15%">${r2(lcTotal)}</td></tr>
+    <tr><td class="noborder" style="border:none"></td><td class="right">Service Charge (+):</td><td class="right">${r2(serviceChargeLC)}</td></tr>
+    <tr><td class="noborder" style="border:none"></td><td class="right">(+) Round off Amt.:</td><td class="right">${r2(roundOff)}</td></tr>
+    <tr><td class="noborder" style="border:none"></td><td class="right">(+) GST${inv.gstPercent ? ' (' + esc(inv.gstPercent) + '%)' : ''}:</td><td class="right">${r2(gstLC)}</td></tr>
+    <tr><td class="noborder" style="border:none"></td><td class="right bold">Amount Payable:</td><td class="right bold">${r2(amountPayable)}</td></tr>
+  </table>
+
+  <div style="margin-top:8px">SAC 998559</div>
+  <div>In Words: <b>INR ${esc(numberToWordsINR_(amountPayable))} ONLY</b></div>
+  ${clientMaster.state ? '<div>Place of Supply: <b>' + esc(clientMaster.state) + '</b></div>' : ''}
+
+  <div class="small" style="margin-top:24px;line-height:1.6">
+    ${PRINT_COMPANY_.bankLines.map(l => '<div>' + l + '</div>').join('')}
+  </div>
+
+  <div class="noprint" style="margin-top:20px">
+    <button onclick="window.print()">Print</button>
+  </div>
+</body></html>`;
 }
 
 /* ---------------------------------------------------------------------
