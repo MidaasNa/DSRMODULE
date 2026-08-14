@@ -412,13 +412,22 @@ tr.overdue-row td{border-color:#f3d4c0}
   <button onclick="exportDsrToExcel()" style="margin-left:6px">⬇ Export Excel</button>
   <button onclick="exportDsrToPdf()" style="margin-left:6px">⬇ Export PDF</button>
 </p>
-<div class="card" style="overflow-x:auto">
-<table id="dsrTable" style="table-layout:fixed">
-<thead><tr id="dsrTableHeadRow"></tr></thead>
-<tbody id="dsrBody"></tbody>
-</table>
-<p id="dsrEmpty" style="display:none;color:#4a5560;text-align:center;padding:20px">No DSR entries yet.</p>
+<div class="card" style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;padding:16px">
+  <div style="flex:1;min-width:220px">
+    <label style="display:block;font-size:12px;color:#4a5560;margin-bottom:4px">Search by Invoice Number</label>
+    <input id="dsrSearchInvoiceInput" placeholder="e.g. HA000001" style="width:100%;padding:7px;box-sizing:border-box" onkeydown="if(event.key==='Enter') dsrSearchByInvoice_()">
+  </div>
+  <button onclick="dsrSearchByInvoice_()" style="padding:8px 16px">Search</button>
+
+  <div style="flex:1;min-width:220px">
+    <label style="display:block;font-size:12px;color:#4a5560;margin-bottom:4px">Search by Confirmation Number</label>
+    <input id="dsrSearchConfirmationInput" placeholder="e.g. HTL-88213" style="width:100%;padding:7px;box-sizing:border-box" onkeydown="if(event.key==='Enter') dsrSearchByConfirmation_()">
+  </div>
+  <button onclick="dsrSearchByConfirmation_()" style="padding:8px 16px">Search</button>
 </div>
+
+<div id="dsrSearchResults" style="margin-top:14px"></div>
+<p id="dsrSearchEmpty" style="color:#4a5560;text-align:center;padding:20px">Search by Invoice Number or Confirmation Number above to find an entry.</p>
 </div>
 
 <div id="clientsVendorsTab" class="tab-panel">
@@ -3801,28 +3810,124 @@ async function loadAndRenderDsr(){
   renderDsrTable_();
 }
 
+// The DSR tab no longer shows one big grid of every invoice — it's
+// search-driven now (by Invoice Number or Confirmation Number). This
+// function just resets that search UI whenever the underlying data is
+// reloaded (tab switch, after save/duplicate/delete). window._dsrRows
+// itself is still the full list — Export Excel/PDF and Customize
+// Columns still work against it exactly as before.
 function renderDsrTable_(){
-  const headRow = document.getElementById('dsrTableHeadRow');
-  const body = document.getElementById('dsrBody');
-  const empty = document.getElementById('dsrEmpty');
-  const visibleCols = window._dsrColumnLayout.filter(c => c.visible);
+  const inputInv = document.getElementById('dsrSearchInvoiceInput');
+  const inputConf = document.getElementById('dsrSearchConfirmationInput');
+  if (inputInv) inputInv.value = '';
+  if (inputConf) inputConf.value = '';
+  const results = document.getElementById('dsrSearchResults');
+  const empty = document.getElementById('dsrSearchEmpty');
+  if (results) results.innerHTML = '';
+  if (empty) { empty.style.display = 'block'; empty.textContent = 'Search by Invoice Number or Confirmation Number above to find an entry.'; }
+}
 
-  headRow.innerHTML = visibleCols.map(c => '<th style="width:' + c.width + 'px;max-width:' + c.width + 'px;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(dsrColumnLabel_(c.key)) + '</th>').join('') + '<th style="width:70px">Actions</th>';
+function dsrSearchByInvoice_(){
+  const q = (document.getElementById('dsrSearchInvoiceInput').value || '').trim().toLowerCase();
+  document.getElementById('dsrSearchConfirmationInput').value = '';
+  if (!q) { renderDsrSearchResults_([], ''); return; }
+  const matches = (window._dsrRows || []).filter(r => String(dsrCellValue_(r, 'docNumber') || '').toLowerCase().includes(q));
+  renderDsrSearchResults_(matches, 'No entry found for that Invoice Number.');
+}
 
-  if (!window._dsrRows.length) {
-    body.innerHTML = '';
-    empty.style.display = 'block';
+function dsrSearchByConfirmation_(){
+  const q = (document.getElementById('dsrSearchConfirmationInput').value || '').trim().toLowerCase();
+  document.getElementById('dsrSearchInvoiceInput').value = '';
+  if (!q) { renderDsrSearchResults_([], ''); return; }
+  const matches = (window._dsrRows || []).filter(r => String(r.confirmationNumber || '').toLowerCase().includes(q));
+  renderDsrSearchResults_(matches, 'No entry found for that Confirmation Number.');
+}
+
+function renderDsrSearchResults_(matches, emptyMessage){
+  const results = document.getElementById('dsrSearchResults');
+  const empty = document.getElementById('dsrSearchEmpty');
+
+  if (!matches.length) {
+    results.innerHTML = '';
+    if (emptyMessage) { empty.style.display = 'block'; empty.textContent = emptyMessage; }
+    else { empty.style.display = 'block'; empty.textContent = 'Search by Invoice Number or Confirmation Number above to find an entry.'; }
     return;
   }
   empty.style.display = 'none';
 
-  body.innerHTML = window._dsrRows.map(row => {
-    const cells = visibleCols.map(c => '<td style="max-width:' + c.width + 'px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(String(dsrCellValue_(row, c.key))) + '</td>').join('');
-    const docNumber = dsrCellValue_(row, 'docNumber');
-
-    const actions = '<td><button onclick="openInvoiceModalForNumber(\'' + docNumber + '\')" style="padding:4px 8px;font-size:12px">Edit</button></td>';
-    return '<tr>' + cells + actions + '</tr>';
+  results.innerHTML = matches.map(row => {
+    const docNumber = String(dsrCellValue_(row, 'docNumber'));
+    const type = dsrCellValue_(row, 'documentType');
+    const meta = [row.client, row.hotelName, row.guestName].filter(Boolean).join(' — ');
+    const dates = (toDisplayDate(row.checkin) || '') + ' → ' + (toDisplayDate(row.checkout) || '');
+    const confLine = row.confirmationNumber ? (' · Conf# ' + escapeHtml(String(row.confirmationNumber))) : '';
+    return '<div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding:12px 16px;margin-bottom:8px">' +
+      '<div>' +
+        '<b>' + escapeHtml(docNumber) + '</b> <span style="color:#8a93a0;font-size:12px">(' + escapeHtml(String(type)) + ')</span><br>' +
+        '<span style="font-size:13px;color:#3f4750">' + escapeHtml(meta) + '</span><br>' +
+        '<span style="font-size:12px;color:#8a93a0">' + escapeHtml(dates) + confLine + '</span>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px">' +
+        '<button onclick="dsrPreviewEntry_(\'' + encodeURIComponent(docNumber) + '\')" style="padding:6px 12px;font-size:12px">Preview</button>' +
+        '<button onclick="dsrOpenEntry_(\'' + encodeURIComponent(docNumber) + '\')" style="padding:6px 12px;font-size:12px">Open</button>' +
+        '<button onclick="openInvoiceModalForNumber(\'' + escapeHtml(docNumber) + '\')" style="padding:6px 12px;font-size:12px">Edit</button>' +
+      '</div>' +
+    '</div>';
   }).join('');
+}
+
+// Preview — a quick read-only summary in a modal, no new tab.
+async function dsrPreviewEntry_(encodedDocNumber){
+  const docNumber = decodeURIComponent(encodedDocNumber);
+  try{
+    const json = await apiGet({ action:'invoiceByNumber', documentNumber:docNumber });
+    const inv = json.invoice;
+    if (!inv) { alert('Could not find that entry.'); return; }
+    const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
+    const fieldRow = (label, value) => '<tr><td style="padding:4px 10px 4px 0;color:#8a93a0;white-space:nowrap;vertical-align:top">' + escapeHtml(label) + '</td><td style="padding:4px 0;font-weight:600">' + escapeHtml(String(value || '')) + '</td></tr>';
+    overlay.innerHTML =
+      '<div style="max-width:460px;margin:40px auto;background:#fff;border-radius:10px;padding:22px">' +
+        '<h2 style="margin-top:0;color:#003366">Preview — ' + escapeHtml(String(dsrCellValue_(inv, 'docNumber'))) + '</h2>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
+          fieldRow('Type', inv.documentType || 'Invoice') +
+          fieldRow('Client', inv.client) +
+          fieldRow('Hotel', inv.hotelName) +
+          fieldRow('Guest', inv.guestName) +
+          fieldRow('Check In', toDisplayDate(inv.checkin)) +
+          fieldRow('Check Out', toDisplayDate(inv.checkout)) +
+          fieldRow('City', inv.city) +
+          fieldRow('Confirmation #', inv.confirmationNumber) +
+          fieldRow('Billing', inv.billingType) +
+          fieldRow('Total', (Number(inv.totalAmount)||0).toFixed(2) + ' ' + (inv.settlementCurrency || inv.currency || 'INR')) +
+        '</table>' +
+        '<div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">' +
+          '<button onclick="dsrOpenEntry_(\'' + encodeURIComponent(docNumber) + '\')" style="padding:9px 16px">Open Full Invoice</button>' +
+          '<button onclick="closeCvDetailModal_(); openInvoiceModalForNumber(\'' + escapeHtml(docNumber) + '\')" style="padding:9px 16px">Edit</button>' +
+          '<button onclick="closeCvDetailModal_()" style="padding:9px 16px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Close</button>' +
+        '</div>' +
+      '</div>';
+    overlay.style.display = 'block';
+  }catch(err){
+    alert('Could not load preview.\n\n' + (err.message || err));
+  }
+}
+
+// Open — the full printable invoice/proforma in a new tab, view-only
+// (no auto-print, unlike printInvoiceByNumber_ used elsewhere).
+async function dsrOpenEntry_(encodedDocNumber){
+  const docNumber = decodeURIComponent(encodedDocNumber);
+  try{
+    const json = await apiGet({ action:'invoiceByNumber', documentNumber:docNumber });
+    const inv = json.invoice;
+    if (!inv) { alert('Could not find that entry to open.'); return; }
+    if (inv.documentType === 'Credit Note') { alert('Printable Credit Note format isn\'t built yet — this covers Invoices and Proformas.'); return; }
+    const html = buildInvoicePrintHtml_(inv);
+    const w = window.open('', '_blank');
+    w.document.write(html);
+    w.document.close();
+  }catch(err){
+    alert('Could not open.\n\n' + (err.message || err));
+  }
 }
 
 async function duplicateInvoiceAction_(invoiceNumber){
