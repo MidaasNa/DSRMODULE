@@ -3620,9 +3620,19 @@ function closeChargeLabelDefaultsModal(){
    the hardcoded default (see PRINT_COMPANY_) rather than breaking.
    --------------------------------------------------------------------- */
 
+// Branch list for this screen is the UNION of Users-sheet branches
+// (knownBranches_) and branches that already have a BranchDetails row —
+// so a branch added here (before anyone in Users has that branch yet)
+// still shows up and stays editable on reopen.
+function allKnownBranchNames_(){
+  const fromUsers = knownBranches_();
+  const fromDetails = (window._branchDetailsList || []).map(d => d.branch).filter(Boolean);
+  return [...new Set([...fromUsers, ...fromDetails])].sort();
+}
+
 function openBranchDetailsModal_(){
   const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
-  const branches = knownBranches_();
+  const branches = allKnownBranchNames_();
   const rows = branches.map(b => {
     const detail = (window._branchDetailsList || []).find(d => d.branch === b);
     const status = detail && detail.gstin
@@ -3638,21 +3648,31 @@ function openBranchDetailsModal_(){
     '<div style="max-width:560px;margin:30px auto;background:#fff;border-radius:10px;padding:22px;max-height:85vh;overflow:auto">' +
       '<h2 style="margin-top:0;color:#003366">Manage Branch Invoice Addresses</h2>' +
       '<p style="color:#4a5560;font-size:13px">Each branch can have its own company name, address, State Code/Name, and GSTIN on printed invoices — needed since GST registration is state-specific. Any branch left unconfigured falls back to the default letterhead.</p>' +
-      (rows || '<p style="color:#8a93a0">No branches found yet — add people to the Users sheet with a Branch first.</p>') +
-      '<div style="margin-top:16px;display:flex;justify-content:flex-end">' +
+      (rows || '<p style="color:#8a93a0">No branches configured yet.</p>') +
+      '<div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">' +
+        '<button onclick="openBranchDetailEditModal_(\'\')" style="padding:9px 16px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">+ Add New Branch</button>' +
         '<button onclick="closeCvDetailModal_()" style="padding:9px 16px">Close</button>' +
       '</div>' +
     '</div>';
   overlay.style.display = 'block';
 }
 
+// encodedBranch === '' (or omitted) means "add a brand-new branch" —
+// the branch name itself becomes an editable text field instead of a
+// fixed header. Editing an EXISTING branch keeps the name fixed, since
+// renaming would desync it from whatever's already on Users/Clients/
+// Vendors/tickets that reference the old name.
 function openBranchDetailEditModal_(encodedBranch){
-  const branch = decodeURIComponent(encodedBranch);
+  const isNew = !encodedBranch;
+  const branch = isNew ? '' : decodeURIComponent(encodedBranch);
   const existing = (window._branchDetailsList || []).find(d => d.branch === branch) || {};
   const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
   overlay.innerHTML =
     '<div style="max-width:480px;margin:30px auto;background:#fff;border-radius:10px;padding:22px">' +
-      '<h2 style="margin-top:0;color:#003366">Invoice Address — ' + escapeHtml(branch) + '</h2>' +
+      '<h2 style="margin-top:0;color:#003366">' + (isNew ? 'Add New Branch' : 'Invoice Address — ' + escapeHtml(branch)) + '</h2>' +
+      (isNew
+        ? cvFieldRow_('Branch Name', '<input id="bd_branchName" placeholder="e.g. Bangalore" style="width:100%;padding:6px;box-sizing:border-box">')
+        : '') +
       cvFieldRow_('Company Name (leave blank to use the default)', '<input id="bd_companyName" value="' + escapeHtml(existing.companyName||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
       cvFieldRow_('Address (one line per row)', '<textarea id="bd_address" rows="4" style="width:100%;padding:6px;box-sizing:border-box">' + escapeHtml(existing.address||'') + '</textarea>') +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
@@ -3660,17 +3680,23 @@ function openBranchDetailEditModal_(encodedBranch){
         cvFieldRow_('State Name', '<input id="bd_stateName" value="' + escapeHtml(existing.stateName||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
       '</div>' +
       cvFieldRow_('GSTIN', '<input id="bd_gstin" value="' + escapeHtml(existing.gstin||'') + '" style="width:100%;padding:6px;box-sizing:border-box">') +
+      (isNew ? '<p style="color:#8a93a0;font-size:11px;margin-top:2px">Note: this only saves the branch\'s invoice letterhead. To make the branch selectable for tickets, clients, and assignments, also add at least one person to it on the Users sheet.</p>' : '') +
       '<div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">' +
         '<button onclick="openBranchDetailsModal_()" style="padding:9px 16px">Back</button>' +
-        '<button onclick="saveBranchDetail_(\'' + encodedBranch + '\')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save</button>' +
+        '<button onclick="saveBranchDetail_(\'' + encodeURIComponent(branch) + '\')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save</button>' +
       '</div>' +
     '</div>';
   overlay.style.display = 'block';
 }
 
 async function saveBranchDetail_(encodedBranch){
-  const branch = decodeURIComponent(encodedBranch);
-  const val = id => document.getElementById(id).value;
+  const val = id => document.getElementById(id) ? document.getElementById(id).value : '';
+  const isNew = !encodedBranch;
+  const branch = isNew ? val('bd_branchName').trim() : decodeURIComponent(encodedBranch);
+  if (!branch) { alert('Branch name is required.'); return; }
+  if (isNew && allKnownBranchNames_().some(b => b.toLowerCase() === branch.toLowerCase())) {
+    alert('A branch with that name already exists.'); return;
+  }
   const detail = {
     branch: branch, companyName: val('bd_companyName'), address: val('bd_address'),
     stateCode: val('bd_stateCode'), stateName: val('bd_stateName'), gstin: val('bd_gstin')
