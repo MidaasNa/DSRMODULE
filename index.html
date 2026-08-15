@@ -421,7 +421,7 @@ input[type=number]{
   Daily Sales Report — every invoice, across every ticket.
   <button onclick="openInvoiceModal(null)" style="margin-left:12px">+ New Entry</button>
   <button onclick="openColumnCustomizeModal()" style="margin-left:6px">⚙ Customize Columns</button>
-  <button class="manager-only" onclick="openChargeLabelDefaultsModal()" style="margin-left:6px;display:none">⚙ Manage Charge Labels</button>
+  <button class="manager-only" onclick="openChargeLabelDefaultsModal()" style="margin-left:6px;display:none">⚙ Manage Remarks Labels</button>
   <button class="manager-only" onclick="openBranchDetailsModal_()" style="margin-left:6px;display:none">⚙ Manage Branch Addresses</button>
   <button onclick="exportDsrToExcel()" style="margin-left:6px">⬇ Export Excel</button>
   <button onclick="exportDsrToPdf()" style="margin-left:6px">⬇ Export PDF</button>
@@ -2347,19 +2347,20 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
       '</div>' +
       invoiceFieldRow_('Remarks', '<textarea id="inv_remarks" rows="2" style="width:100%;padding:5px;box-sizing:border-box">' + escapeHtml(v.remarks || (rec&&rec.remarks) || '') + '</textarea>') +
 
-      // Custom Charges — collapsed behind a toggle by default (it's the
-      // least-used section), so it doesn't take up space unless it's
-      // actually needed. Starts open automatically when editing an
-      // entry that already has charges filled in.
+      // Remarks (custom label/amount-or-note rows — Trip ID, Dept ID,
+      // Project ID, etc.) — collapsed behind a toggle by default (it's
+      // the least-used section), so it doesn't take up space unless
+      // it's actually needed. Starts open automatically when editing
+      // an entry that already has some filled in.
       (function(){
         const hasChargesAlready = window._invoiceChargesDraft.some(c => (c.label||'').trim() || String(c.amount||'').trim());
         return '<button type="button" onclick="toggleCustomChargesPanel_()" style="margin:4px 0;padding:5px 12px;font-size:12px">' +
-                 '<span id="inv_chargesToggleIcon">' + (hasChargesAlready ? '▾' : '▸') + '</span> Custom Charges' +
+                 '<span id="inv_chargesToggleIcon">' + (hasChargesAlready ? '▾' : '▸') + '</span> Remarks' +
                '</button>' +
                '<div id="inv_chargesPanel" style="display:' + (hasChargesAlready ? 'block' : 'none') + '">' +
-                 '<div style="font-size:11px;color:#8a93a0;margin-bottom:6px">Remarks only — doesn\'t affect Selling Price, Total Billed, or Profit. Use Service Charge above for anything that needs to actually be billed.</div>' +
+                 '<div style="font-size:11px;color:#8a93a0;margin-bottom:6px">Reference notes only (Trip ID, Dept ID, Project ID, etc.) — doesn\'t affect Selling Price, Total Billed, or Profit. Use Service Charge above for anything that needs to actually be billed.</div>' +
                  '<div id="inv_chargesRows"></div>' +
-                 '<button onclick="window._invoiceChargesDraft.push({label:\'\',amount:\'\'});renderChargesRows_()" style="margin-top:4px;padding:5px 12px">+ Add Charge</button>' +
+                 '<button onclick="window._invoiceChargesDraft.push({label:\'\',amount:\'\'});renderChargesRows_()" style="margin-top:4px;padding:5px 12px">+ Add Remark</button>' +
                '</div>';
       })() +
 
@@ -3540,8 +3541,8 @@ function renderChargeLabelDefaultsModal_(draft){
   ).join('');
   overlay.innerHTML =
     '<div style="max-width:520px;margin:40px auto;background:#fff;border-radius:10px;padding:24px">' +
-      '<h2 style="margin-top:0;color:#003366">Manage Charge Labels</h2>' +
-      '<p style="color:#4a5560">Default rows every new DSR entry\'s Custom Charges table starts with.</p>' +
+      '<h2 style="margin-top:0;color:#003366">Manage Remarks Labels</h2>' +
+      '<p style="color:#4a5560">Default rows every new DSR entry\'s Remarks table starts with.</p>' +
       '<div id="charge_label_rows">' + (rowsHtml || '<p style="color:#8a93a0">None yet.</p>') + '</div>' +
       '<button onclick="window._chargeLabelDraft.push(\'\');renderChargeLabelDefaultsModal_(window._chargeLabelDraft)" style="margin-top:6px;padding:7px 14px">+ Add Label</button>' +
       '<div style="margin-top:20px;display:flex;gap:10px;justify-content:flex-end">' +
