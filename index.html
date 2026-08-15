@@ -2794,8 +2794,11 @@ function buildInvoicePrintHtml_(rowsOrInv){
   const serviceChargeTotal = lines.reduce((s,l) => s + l.serviceChargeSettle, 0);
   const gstTotal = lines.reduce((s,l) => s + l.gstSettle, 0);
   const preRoundTotal = total + serviceChargeTotal + gstTotal;
-  const amountPayable = Math.round(preRoundTotal);
-  const roundOff = amountPayable - preRoundTotal;
+  // Rounding to a whole number (with a visible "Round off" line) is an
+  // INR/domestic-invoice convention — a foreign-currency settlement
+  // (BTC-USD/EUR/GBP) keeps exact 2-decimal precision instead.
+  const amountPayable = settleInINR ? Math.round(preRoundTotal) : preRoundTotal;
+  const roundOff = settleInINR ? (amountPayable - preRoundTotal) : 0;
 
   const clientMaster = (window._clientsList || []).find(c => c.name === first.client) || {};
   const isProforma = first.documentType === 'Proforma';
@@ -2919,7 +2922,7 @@ function buildInvoicePrintHtml_(rowsOrInv){
   <table style="margin-top:6px">
     <tr><td style="width:60%">HSN 998559</td><td class="right bold">TOTAL:</td><td class="right" style="width:15%">${r2(total)}</td></tr>
     <tr><td class="noborder" style="border:none"></td><td class="right">Service Charge (+):</td><td class="right">${r2(serviceChargeTotal)}</td></tr>
-    <tr><td class="noborder" style="border:none"></td><td class="right">(+) Round off Amt.:</td><td class="right">${r2(roundOff)}</td></tr>
+    ${settleInINR ? '<tr><td class="noborder" style="border:none"></td><td class="right">(+) Round off Amt.:</td><td class="right">' + r2(roundOff) + '</td></tr>' : ''}
     <tr><td class="noborder" style="border:none"></td><td class="right">(+) GST${gstPercentDisplay && gstPercentDisplay !== 'Multiple' ? ' (' + esc(gstPercentDisplay) + '%)' : ''}:</td><td class="right">${r2(gstTotal)}</td></tr>
     <tr><td class="noborder" style="border:none"></td><td class="right bold">Amount Payable (${esc(settlementCurrency)}):</td><td class="right bold">${r2(amountPayable)}</td></tr>
   </table>
