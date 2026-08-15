@@ -2108,7 +2108,14 @@ function computeInvoiceTotalsClient_(f){
   const gstBase = serviceCharge > 0 ? serviceCharge : sellingPrice;
   const gstAmount = gstBase * (gstPct/100);
   const totalBilled = sellingPrice + gstAmount;
-  const totalBilledINR = totalBilled * roe;
+  // Service Charge is always a flat INR fee — never ROE-converted,
+  // regardless of Currency or Billing Instructions — and neither is any
+  // GST computed off it (see the matching comment on computeInvoiceTotals_
+  // in Code.gs for the full rule).
+  const gstOnServiceCharge = serviceCharge > 0;
+  const feConvertible = netHotelCost + totalMarkup + (gstOnServiceCharge ? 0 : gstAmount);
+  const inrFlat = serviceCharge + (gstOnServiceCharge ? gstAmount : 0);
+  const totalBilledINR = feConvertible * roe + inrFlat;
   const profit = totalMarkup + commissionAmount + serviceCharge - reward;
   const profitPercent = totalBilled > 0 ? (profit/totalBilled)*100 : 0;
 
@@ -2763,12 +2770,13 @@ function buildInvoicePrintHtml_(rowsOrInv){
   const r2 = n => (Math.round((Number(n)||0) * 100) / 100).toFixed(2);
 
   // Which currency the client actually gets billed in follows Billing
-  // Instructions, not the room-rate Currency field. ROE always applies —
-  // it's the rate FROM the entry's own Currency TO the settlement
-  // currency, whatever that is (e.g. Currency=MYR, ROE=MYR→USD, Billing
-  // Instructions=BTC-USD — not necessarily a rate to INR). Only the
-  // final whole-number rounding is INR-specific (see amountPayable
-  // below) — the conversion itself always happens.
+  // Instructions, not the room-rate Currency field. ROE applies to the
+  // genuinely-FE room cost/markup (and GST, when it's based on Selling
+  // Price rather than Service Charge — see below) — it's the rate FROM
+  // the entry's own Currency TO the settlement currency, whatever that
+  // is (e.g. Currency=MYR, ROE=MYR→USD, Billing Instructions=BTC-USD —
+  // not necessarily a rate to INR). Only the final whole-number rounding
+  // is INR-specific (see amountPayable below).
   const settlementCurrency = first.settlementCurrency || 'INR';
   const settleInINR = settlementCurrency === 'INR';
 
@@ -2781,10 +2789,19 @@ function buildInvoicePrintHtml_(rowsOrInv){
     // rate, never the cost/markup split behind it.
     const feTotal = (Number(inv.netHotelCost)||0) + (Number(inv.totalMarkup)||0);
     const ratePerNightFE = nights > 0 ? feTotal / nights : feTotal;
-    // Settlement-currency amounts — ROE always applies here.
+    // Service Charge is always a flat INR fee — quoted and billed in INR
+    // no matter what currency the room rate is in or what currency the
+    // invoice settles in — so it's never ROE-converted. GST follows
+    // whichever it was actually calculated on: when there's a Service
+    // Charge, GST is a % of THAT (so it's INR too, like the Service
+    // Charge itself); otherwise GST is a % of the FE room total, so it
+    // converts along with it.
+    const serviceCharge = Number(inv.serviceCharge) || 0;
+    const gstAmount = Number(inv.gstAmount) || 0;
+    const gstOnServiceCharge = serviceCharge > 0;
     const totalSettle = feTotal * roe;
-    const serviceChargeSettle = (Number(inv.serviceCharge)||0) * roe;
-    const gstSettle = (Number(inv.gstAmount)||0) * roe;
+    const serviceChargeSettle = serviceCharge;
+    const gstSettle = gstOnServiceCharge ? gstAmount : gstAmount * roe;
     return { inv, roe, nights, feTotal, ratePerNightFE, totalSettle, serviceChargeSettle, gstSettle };
   });
 
@@ -2837,6 +2854,28 @@ function buildInvoicePrintHtml_(rowsOrInv){
   const mixedCurrencyWarning = settlementCurrencyDisplay === 'Multiple'
     ? '<div style="margin:6px 0;padding:6px 10px;background:#fdecea;border:1px solid #f3c1bb;border-radius:4px;color:#8a2c22;font-size:11px">⚠ These bookings have different Billing Instructions currencies — the total below only adds ' + esc(settlementCurrency) + ' amounts correctly if they actually match. Please verify.</div>'
     : '';
+
+  // India GST law splits the SAME total GST amount differently depending
+  // on where the client is registered, relative to the branch issuing
+  // the invoice — this doesn't change how much tax is charged, only how
+  // it's broken down on the printout:
+  //   - Client's State Name matches the branch's registered State Name
+  //     (intra-state supply)   -> CGST + SGST, each half the GST %
+  //   - States differ, or either one is unknown (inter-state supply,
+  //     export, or just missing master data — safest default when
+  //     unsure)                -> IGST, the full GST % as one line
+  const supplierState = String(company.stateName || '').trim().toLowerCase();
+  const clientState = String(clientMaster.state || '').trim().toLowerCase();
+  const isIntraState = !!supplierState && !!clientState && supplierState === clientState;
+  const gstRateNum = Number(gstPercentDisplay);
+  const hasGstRateLabel = gstPercentDisplay && gstPercentDisplay !== 'Multiple' && !isNaN(gstRateNum);
+  const gstRow = (label, pct, amount) =>
+    '<tr><td class="noborder" style="border:none"></td><td class="right">(+) ' + label + (pct ? ' (' + pct + '%)' : '') + ':</td><td class="right">' + r2(amount) + '</td></tr>';
+  const gstRows = gstTotal === 0
+    ? gstRow('GST', hasGstRateLabel ? esc(gstPercentDisplay) : '', 0)
+    : isIntraState
+      ? gstRow('CGST', hasGstRateLabel ? (gstRateNum/2) : '', gstTotal/2) + gstRow('SGST', hasGstRateLabel ? (gstRateNum/2) : '', gstTotal/2)
+      : gstRow('IGST', hasGstRateLabel ? esc(gstPercentDisplay) : '', gstTotal);
   const totalColumnLabel = settleInINR ? 'Total Amount LC' : 'Total Amount (' + esc(settlementCurrency) + ')';
 
   const lineItemHeader = isConsolidated
@@ -2922,8 +2961,8 @@ function buildInvoicePrintHtml_(rowsOrInv){
     <tr><td style="width:60%">HSN 998559</td><td class="right bold">TOTAL:</td><td class="right" style="width:15%">${r2(total)}</td></tr>
     <tr><td class="noborder" style="border:none"></td><td class="right">Service Charge (+):</td><td class="right">${r2(serviceChargeTotal)}</td></tr>
     ${settleInINR ? '<tr><td class="noborder" style="border:none"></td><td class="right">(+) Round off Amt.:</td><td class="right">' + r2(roundOff) + '</td></tr>' : ''}
-    <tr><td class="noborder" style="border:none"></td><td class="right">(+) GST${gstPercentDisplay && gstPercentDisplay !== 'Multiple' ? ' (' + esc(gstPercentDisplay) + '%)' : ''}:</td><td class="right">${r2(gstTotal)}</td></tr>
-    <tr><td class="noborder" style="border:none"></td><td class="right bold">Amount Payable (${esc(settlementCurrency)}):</td><td class="right bold">${r2(amountPayable)}</td></tr>
+    ${gstRows}
+    <tr><td class="noborder" style="border:none"></td><td class="right bold">Amount Payable${settleInINR ? '' : ' (' + esc(settlementCurrency) + ')'}:</td><td class="right bold">${r2(amountPayable)}</td></tr>
   </table>
 
   <div style="margin-top:8px">SAC 998559</div>
