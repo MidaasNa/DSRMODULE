@@ -1993,6 +1993,14 @@ window._dsrRows = [];
 window._dsrColumnLayout = null; // loaded per-user from the backend
 window._clientsList = [];  // [{name, salesPerson, serviceCharge}, ...] — preloaded master list
 window._vendorsList = [];  // ['Vendor A', 'Vendor B', ...]
+// Consolidated-invoice-in-progress state — bookings staged via "+ Add
+// Another Booking" while creating a brand-new entry, plus the few
+// invoice-level fields (Branch/Billing Type/Client/Sales Person)
+// carried forward into the next booking's blank form for convenience.
+// Only ever populated while creating a NEW entry; reset on every fresh
+// open/close (see openInvoiceModal / openInvoiceModalForNumber / closeInvoiceModal).
+window._pendingBookings = [];
+window._nextBookingSeed = null;
 
 const HOTEL_CHAINS_ = ['Marriott','Hilton','IHG','Accor','Hyatt','Radisson','Taj','Oberoi','ITC','Lemon Tree','Other'];
 const CURRENCIES_ = ['INR','USD','EUR','GBP','AED','SGD','MYR','AUD'];
@@ -2109,6 +2117,12 @@ function invoiceSectionHeader_(text){
    way this renders the same 6-section form; only the pre-fill source
    differs. */
 async function openInvoiceModal(rowId){
+  // Fresh open — any bookings staged from a previous, abandoned
+  // consolidated entry don't carry over. (addAnotherBooking_ rebuilds
+  // the form by calling renderInvoiceModal_ directly, bypassing this,
+  // so an in-progress consolidated entry is untouched by this reset.)
+  window._pendingBookings = [];
+  window._nextBookingSeed = null;
   let rec = null, existing = null;
   if (rowId) {
     rec = data.find(r => r.rowId === rowId);
@@ -2129,23 +2143,33 @@ async function openInvoiceModal(rowId){
   renderInvoiceModal_(rowId, rec, existing);
 }
 
-async function openInvoiceModalForNumber(documentNumber){
+async function openInvoiceModalForNumber(documentNumber, occurrenceIndex){
+  window._pendingBookings = [];
+  window._nextBookingSeed = null;
+  const idx = occurrenceIndex || 0;
   try{
     const json = await apiGet({ action:'dsr' });
-    const existing = (json.invoices || []).find(inv =>
+    const matches = (json.invoices || []).filter(inv =>
       inv.invoiceNumber === documentNumber || inv.proformaNumber === documentNumber || inv.creditNoteNumber === documentNumber
     );
+    const existing = matches[idx];
     if (!existing) { alert('Entry not found — try refreshing.'); return; }
     if (existing.documentType === 'Credit Note') { openCreditNoteModal_(existing); return; }
-    renderInvoiceModal_(existing.rowId || null, null, existing);
+    renderInvoiceModal_(existing.rowId || null, null, existing, idx, matches.length);
   }catch(err){
     alert('Could not load entry.\n\n' + (err.message || err));
   }
 }
 
-function renderInvoiceModal_(rowId, rec, existing){
-  const v = existing || {};
+function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount){
+  const occIdx = occurrenceIndex || 0;
   const isNew = !existing;
+  // Only when adding another booking to a consolidated entry-in-progress
+  // (isNew, standalone, and a seed was staged by addAnotherBooking_) do
+  // a few invoice-level fields carry forward — everything else starts
+  // blank for the next booking.
+  const seed = (isNew && !rowId && window._nextBookingSeed) ? window._nextBookingSeed : null;
+  const v = existing || seed || {};
   const overlay = document.getElementById('invoiceModalOverlay');
 
   // Custom charges: start from the saved invoice's rows, or default
@@ -2162,11 +2186,28 @@ function renderInvoiceModal_(rowId, rec, existing){
   const checkin = v.checkin || (rec && rec.checkin) || '';
   const checkout = v.checkout || (rec && rec.checkout) || '';
 
+  // Shown on an already-saved Consolidated invoice's individual booking.
+  const siblingNote = (existing && siblingCount > 1)
+    ? ' <span style="font-size:13px;font-weight:normal;color:#8a93a0">(Booking ' + (occIdx+1) + ' of ' + siblingCount + ' in this Consolidated Invoice)</span>'
+    : '';
+
+  // Shown while building up a brand-new consolidated entry, before it's saved.
+  const pendingBar = (isNew && !rowId && window._pendingBookings.length)
+    ? '<div style="background:#eef3f8;border:1px solid #d5e0ea;border-radius:8px;padding:10px 14px;margin-bottom:14px;max-width:640px">' +
+        '<b>This will be saved as ONE Consolidated Invoice — ' + (window._pendingBookings.length + 1) + ' booking(s):</b>' +
+        '<ol style="margin:6px 0 0;padding-left:20px;font-size:12px">' +
+          window._pendingBookings.map((b,i) => '<li style="margin-bottom:2px">' + escapeHtml(b.hotelName||'(untitled)') + ' — ' + escapeHtml(b.guestName||'') + (b.checkin ? ' (' + escapeHtml(b.checkin) + ' → ' + escapeHtml(b.checkout||'') + ')' : '') + ' <button type="button" onclick="removePendingBooking_(' + i + ')" style="margin-left:6px;padding:0 5px;font-size:11px">Remove</button></li>').join('') +
+          '<li style="color:#4a5560">Booking ' + (window._pendingBookings.length+1) + ' — currently being entered below</li>' +
+        '</ol>' +
+      '</div>'
+    : '';
+
   overlay.innerHTML =
     '<div style="max-width:1600px;width:97vw;margin:14px auto;background:#fff;border-radius:10px;padding:0;max-height:94vh;font-size:13px;display:flex;align-items:stretch;overflow:hidden">' +
       '<div id="voucherPanelContainer"></div>' +
       '<div id="invoiceFormContent" style="flex:1;min-width:0;padding:18px 22px;overflow:auto;max-height:94vh">' +
-      '<h2 style="margin:0 0 10px;color:#003366;font-size:20px">' + (existing ? (existing.documentType || 'Invoice') + ' ' + escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') : 'New DSR Entry') + '</h2>' +
+      '<h2 style="margin:0 0 10px;color:#003366;font-size:20px">' + (existing ? (existing.documentType || 'Invoice') + ' ' + escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') + siblingNote : 'New DSR Entry') + '</h2>' +
+      pendingBar +
 
       '<div style="max-width:640px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:0 10px">' +
         invoiceFieldRow_('Branch *', '<select id="inv_branch" style="width:100%;padding:5px" onchange="onInvoiceBranchChange_()">' +
@@ -2263,19 +2304,20 @@ function renderInvoiceModal_(rowId, rec, existing){
           '<button onclick="closeInvoiceModal()" style="padding:9px 16px">Cancel</button>' +
           (existing ? '<button onclick="printInvoiceByNumber_(\'' + (existing.invoiceNumber || existing.proformaNumber) + '\')" style="padding:9px 16px">Print</button>' : '') +
           (existing && (existing.documentType || 'Invoice') === 'Invoice'
-            ? '<button onclick="duplicateInvoiceAction_(\'' + existing.invoiceNumber + '\')" style="padding:9px 16px">Duplicate</button>' +
+            ? '<button onclick="duplicateInvoiceAction_(\'' + existing.invoiceNumber + '\',' + occIdx + ')" style="padding:9px 16px">Duplicate</button>' +
               '<button onclick="openCreateCreditNoteModal_(\'' + existing.invoiceNumber + '\')" style="padding:9px 16px">Credit Note</button>'
             : '') +
           (existing && existing.documentType === 'Proforma'
             ? '<button onclick="convertProformaToInvoiceAction_(\'' + existing.proformaNumber + '\')" style="padding:9px 16px;background:#0a6b3d;color:#fff;border:none;border-radius:5px;font-weight:600">Convert to Invoice</button>'
             : '') +
           (existing
-            ? '<button onclick="deleteInvoiceAction_(\'' + (existing.invoiceNumber || existing.proformaNumber || existing.creditNoteNumber) + '\')" style="padding:9px 16px">Delete</button>'
+            ? '<button onclick="deleteInvoiceAction_(\'' + (existing.invoiceNumber || existing.proformaNumber || existing.creditNoteNumber) + '\',' + occIdx + ')" style="padding:9px 16px">Delete</button>'
             : '') +
           (existing
-            ? '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',\'' + (existing.invoiceNumber || existing.proformaNumber) + '\')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save Changes</button>'
+            ? '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',\'' + (existing.invoiceNumber || existing.proformaNumber) + '\',' + occIdx + ')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save Changes</button>'
             : '<button onclick="saveAsProforma_(' + (rowId?'\''+rowId+'\'':'null') + ')" style="padding:9px 16px">Save as Proforma</button>' +
-              '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',null)" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Create Invoice</button>') +
+              (!rowId ? '<button onclick="addAnotherBooking_()" style="padding:9px 16px">+ Add Another Booking</button>' : '') +
+              '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',null)" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">' + (window._pendingBookings.length ? 'Create Consolidated Invoice (' + (window._pendingBookings.length+1) + ' bookings)' : 'Create Invoice') + '</button>') +
         '</div>' +
       '</div>' +
     '</div></div>';
@@ -2523,14 +2565,25 @@ function validateInvoiceFormRequired_(){
   return true;
 }
 
-async function saveInvoice_(rowId, invoiceNumber){
+async function saveInvoice_(rowId, invoiceNumber, occurrenceIndex){
   if (!validateInvoiceFormRequired_()) return;
   const fields = readInvoiceFormFields_();
   ['pricePerNight','markupPerNight','commission','taxPercent','serviceCharge','reward','gstPercent','roe','adults','children']
     .forEach(k => { if (fields[k] === '') delete fields[k]; });
   try{
     if (invoiceNumber) {
-      await apiPost({ action:'updateInvoice', invoiceNumber:invoiceNumber, fields:fields, actor:currentUser });
+      await apiPost({ action:'updateInvoice', invoiceNumber:invoiceNumber, occurrenceIndex:(occurrenceIndex||0), fields:fields, actor:currentUser });
+    } else if (window._pendingBookings.length) {
+      // Consolidated — every booking added via "+ Add Another Booking",
+      // plus this last one, all saved together under one new number.
+      const bookings = [...window._pendingBookings, fields];
+      const result = await apiPost({ action:'createConsolidatedInvoice', rowId:rowId, bookings:bookings, documentType:'Invoice', actor:currentUser });
+      window._pendingBookings = [];
+      window._nextBookingSeed = null;
+      closeInvoiceModal();
+      if (activeTab === 'dsrTab') await loadAndRenderDsr(); else await refreshFromSheet(false);
+      alert('Created Invoice ' + result.invoiceNumber + ' with ' + bookings.length + ' bookings.');
+      return;
     } else {
       await apiPost({ action:'createInvoice', rowId:rowId, fields:fields, actor:currentUser });
     }
@@ -2547,6 +2600,16 @@ async function saveAsProforma_(rowId){
   ['pricePerNight','markupPerNight','commission','taxPercent','serviceCharge','reward','gstPercent','roe','adults','children']
     .forEach(k => { if (fields[k] === '') delete fields[k]; });
   try{
+    if (window._pendingBookings.length) {
+      const bookings = [...window._pendingBookings, fields];
+      const result = await apiPost({ action:'createConsolidatedInvoice', rowId:rowId, bookings:bookings, documentType:'Proforma', actor:currentUser });
+      window._pendingBookings = [];
+      window._nextBookingSeed = null;
+      closeInvoiceModal();
+      if (activeTab === 'dsrTab') await loadAndRenderDsr(); else await refreshFromSheet(false);
+      alert('Created Proforma ' + result.invoiceNumber + ' with ' + bookings.length + ' bookings.');
+      return;
+    }
     await apiPost({ action:'createProforma', rowId:rowId, fields:fields, actor:currentUser });
     closeInvoiceModal();
     if (activeTab === 'dsrTab') await loadAndRenderDsr(); else await refreshFromSheet(false);
@@ -2554,6 +2617,27 @@ async function saveAsProforma_(rowId){
     alert('Could not save this Proforma.\n\n' + (err.message || err));
   }
 }
+
+// Stashes the booking currently in the form, then reopens a blank form
+// for the next one — all of them get saved together under ONE new
+// Invoice/Proforma Number when Create Invoice / Save as Proforma is
+// finally clicked. Only Branch, Billing Type, Client, and Sales Person
+// carry forward (the fields most likely shared across bookings on one
+// consolidated invoice) — everything else, including Confirmation
+// Number, starts blank since those typically differ per booking.
+function addAnotherBooking_(){
+  if (!validateInvoiceFormRequired_()) return;
+  const fields = readInvoiceFormFields_();
+  window._pendingBookings.push(fields);
+  window._nextBookingSeed = { branch: fields.branch, billingType: fields.billingType, client: fields.client, salesPerson: fields.salesPerson };
+  renderInvoiceModal_(null, null, null);
+}
+
+function removePendingBooking_(index){
+  window._pendingBookings.splice(index, 1);
+  renderInvoiceModal_(null, null, null);
+}
+
 
 async function convertProformaToInvoiceAction_(proformaNumber){
   if (!confirm('Convert ' + proformaNumber + ' into a real Invoice? This hands out a real Invoice Number and can\'t be undone.')) return;
@@ -2568,6 +2652,8 @@ async function convertProformaToInvoiceAction_(proformaNumber){
 }
 
 function closeInvoiceModal(){
+  window._pendingBookings = [];
+  window._nextBookingSeed = null;
   const overlay = document.getElementById('invoiceModalOverlay');
   overlay.style.display = 'none';
   overlay.innerHTML = '';
@@ -2628,11 +2714,11 @@ function numberToWordsINR_(num){
 
 async function printInvoiceByNumber_(docNumber){
   try{
-    const json = await apiGet({ action:'invoiceByNumber', documentNumber:docNumber });
-    const inv = json.invoice;
-    if (!inv) { alert('Could not find that entry to print.'); return; }
-    if (inv.documentType === 'Credit Note') { alert('Printable Credit Note format isn\'t built yet — this covers Invoices and Proformas.'); return; }
-    const html = buildInvoicePrintHtml_(inv);
+    const json = await apiGet({ action:'invoicesByNumber', documentNumber:docNumber });
+    const rows = json.invoices || [];
+    if (!rows.length) { alert('Could not find that entry to print.'); return; }
+    if (rows[0].documentType === 'Credit Note') { alert('Printable Credit Note format isn\'t built yet — this covers Invoices and Proformas.'); return; }
+    const html = buildInvoicePrintHtml_(rows);
     const w = window.open('', '_blank');
     w.document.write(html);
     w.document.close();
@@ -2642,33 +2728,49 @@ async function printInvoiceByNumber_(docNumber){
   }
 }
 
-function buildInvoicePrintHtml_(inv){
+// rowsOrInv: an array of invoice rows sharing one document number (a
+// Consolidated invoice has more than one), or — for backward
+// compatibility with any old call site — a single invoice object.
+function buildInvoicePrintHtml_(rowsOrInv){
+  const list = Array.isArray(rowsOrInv) ? rowsOrInv : [rowsOrInv];
+  const first = list[0];
+  const isConsolidated = list.length > 1;
   const r2 = n => (Math.round((Number(n)||0) * 100) / 100).toFixed(2);
-  const roe = Number(inv.roe) || 1;
-  const nights = Number(inv.nights) || 0;
 
-  // Blended per-night rate — room cost + tax + markup, all baked into
-  // ONE number. This is the whole point: the client sees a single rate,
-  // never the cost/markup split behind it.
-  const feTotal = (Number(inv.netHotelCost)||0) + (Number(inv.totalMarkup)||0);
-  const ratePerNightFE = nights > 0 ? feTotal / nights : feTotal;
-  const lcTotal = feTotal * roe;
-  const serviceChargeLC = (Number(inv.serviceCharge)||0) * roe;
-  const gstLC = (Number(inv.gstAmount)||0) * roe;
+  // Per-booking numbers, computed exactly as before — just once per
+  // row instead of once for the whole document.
+  const lines = list.map(inv => {
+    const roe = Number(inv.roe) || 1;
+    const nights = Number(inv.nights) || 0;
+    // Blended per-night rate — room cost + tax + markup, all baked into
+    // ONE number. This is the whole point: the client sees a single
+    // rate, never the cost/markup split behind it.
+    const feTotal = (Number(inv.netHotelCost)||0) + (Number(inv.totalMarkup)||0);
+    const ratePerNightFE = nights > 0 ? feTotal / nights : feTotal;
+    const lcTotal = feTotal * roe;
+    const serviceChargeLC = (Number(inv.serviceCharge)||0) * roe;
+    const gstLC = (Number(inv.gstAmount)||0) * roe;
+    return { inv, roe, nights, feTotal, ratePerNightFE, lcTotal, serviceChargeLC, gstLC };
+  });
+
+  // Combined totals across every booking on this document.
+  const lcTotal = lines.reduce((s,l) => s + l.lcTotal, 0);
+  const serviceChargeLC = lines.reduce((s,l) => s + l.serviceChargeLC, 0);
+  const gstLC = lines.reduce((s,l) => s + l.gstLC, 0);
   const preRoundTotal = lcTotal + serviceChargeLC + gstLC;
   const amountPayable = Math.round(preRoundTotal);
   const roundOff = amountPayable - preRoundTotal;
 
-  const clientMaster = (window._clientsList || []).find(c => c.name === inv.client) || {};
-  const isProforma = inv.documentType === 'Proforma';
-  const docNumberDisplay = inv.invoiceNumber || inv.proformaNumber || '';
+  const clientMaster = (window._clientsList || []).find(c => c.name === first.client) || {};
+  const isProforma = first.documentType === 'Proforma';
+  const docNumberDisplay = first.invoiceNumber || first.proformaNumber || '';
   const title = isProforma ? 'PROFORMA INVOICE' : 'TAX INVOICE';
 
   // Letterhead varies by branch (GST registration is state-specific) —
   // falls back field-by-field to the hardcoded default for anything not
   // yet configured for this branch, so an unconfigured branch still
   // prints something sensible rather than blank fields.
-  const branchDetail = (window._branchDetailsList || []).find(b => b.branch === inv.branch) || {};
+  const branchDetail = (window._branchDetailsList || []).find(b => b.branch === first.branch) || {};
   const company = {
     name: branchDetail.companyName || PRINT_COMPANY_.name,
     aka: PRINT_COMPANY_.aka,
@@ -2679,6 +2781,39 @@ function buildInvoicePrintHtml_(inv){
   };
 
   const esc = s => escapeHtml(String(s == null ? '' : s));
+  // A few header fields (Confirmation #, Booking Given By, Sales Rep,
+  // GST %) are per-booking — show the shared value when every booking
+  // on this document agrees, otherwise "Multiple" rather than picking
+  // one arbitrarily.
+  const sharedOrMultiple = key => list.every(inv => String(inv[key]||'') === String(first[key]||'')) ? (first[key]||'') : 'Multiple';
+  const confDisplay = sharedOrMultiple('confirmationNumber');
+  const bookingGivenByDisplay = sharedOrMultiple('bookingGivenBy');
+  const salesPersonDisplay = sharedOrMultiple('salesPerson');
+  const gstPercentDisplay = sharedOrMultiple('gstPercent');
+
+  const lineItemHeader = isConsolidated
+    ? '<tr class="boxhead"><td>Hotel</td><td>Guest Name</td><td>Room Type</td><td>Arrival Date</td><td>Departure Date</td><td>Cur Code</td><td>No of Night</td><td>Rate Per Night</td><td>Total In FE</td><td>ROE</td><td>Total Amount LC</td></tr>'
+    : '<tr class="boxhead"><td>Guest Name</td><td>No of Room</td><td>Room Type</td><td>Arrival Date</td><td>Departure Date</td><td>Cur Code</td><td>No of Night</td><td>Rate Per Night</td><td>Total In FE</td><td>ROE</td><td>Total Amount LC</td></tr>';
+
+  const lineItemRows = lines.map(l => {
+    const inv = l.inv;
+    const firstCell = isConsolidated ? esc(inv.hotelName) : esc(inv.guestName);
+    const secondCell = isConsolidated ? esc(inv.guestName) : '<span class="center">1</span>';
+    return '<tr>' +
+      '<td>' + firstCell + '</td>' + (isConsolidated ? '<td>' + secondCell + '</td>' : '<td class="center">1</td>') +
+      '<td>' + esc(inv.roomType) + '</td>' +
+      '<td>' + esc(toDisplayDate(inv.checkin) || inv.checkin) + '</td><td>' + esc(toDisplayDate(inv.checkout) || inv.checkout) + '</td>' +
+      '<td class="center">' + esc(inv.currency||'INR') + '</td><td class="center">' + l.nights + '</td>' +
+      '<td class="right">' + r2(l.ratePerNightFE) + '</td><td class="right">' + r2(l.feTotal) + '</td><td class="right">' + r2(l.roe) + '</td><td class="right">' + r2(l.lcTotal) + '</td>' +
+    '</tr>';
+  }).join('');
+
+  // "Hotel Name / Country / City" as one header line only makes sense
+  // for a single booking — a Consolidated invoice can span several
+  // hotels/cities, so those show per-line in the table instead.
+  const hotelHeaderBlock = !isConsolidated
+    ? '<table style="margin-top:6px"><tr><td class="bold">Hotel Name: ' + esc(first.hotelName) + '</td><td class="bold" style="width:25%">Country: ' + esc(first.country) + '</td><td class="bold" style="width:25%">City: ' + esc(first.city) + '</td></tr></table>'
+    : '';
 
   return `<html><head><title>${esc(docNumberDisplay)}</title>
 <style>
@@ -2695,7 +2830,7 @@ function buildInvoicePrintHtml_(inv){
   @media print{ .noprint{display:none} }
 </style></head>
 <body>
-  <div class="title">${esc(title)}</div>
+  <div class="title">${esc(title)}${isConsolidated ? ' (Consolidated — ' + list.length + ' Bookings)' : ''}</div>
   <table>
     <tr>
       <td style="width:34%">
@@ -2709,15 +2844,15 @@ function buildInvoicePrintHtml_(inv){
         <div class="bold center">HOTEL ${esc(isProforma ? 'PROFORMA' : 'INVOICE')}</div>
         <table style="border:none;margin-top:4px">
           <tr class="noborder"><td class="noborder">${isProforma?'Proforma':'INV'} #</td><td class="noborder bold">${esc(docNumberDisplay)}</td></tr>
-          <tr class="noborder"><td class="noborder">Date</td><td class="noborder">${esc(toDisplayDate(inv.createdAt ? inv.createdAt.split(' ')[0] : '') || inv.createdAt || '')}</td></tr>
-          <tr class="noborder"><td class="noborder">Conf #</td><td class="noborder">${esc(inv.confirmationNumber)}</td></tr>
+          <tr class="noborder"><td class="noborder">Date</td><td class="noborder">${esc(toDisplayDate(first.createdAt ? first.createdAt.split(' ')[0] : '') || first.createdAt || '')}</td></tr>
+          <tr class="noborder"><td class="noborder">Conf #</td><td class="noborder">${esc(confDisplay)}</td></tr>
           <tr class="noborder"><td class="noborder">Ref No.</td><td class="noborder">${esc(docNumberDisplay)}</td></tr>
-          <tr class="noborder"><td class="noborder">Bkg Given By</td><td class="noborder">${esc(inv.bookingGivenBy)}</td></tr>
-          <tr class="noborder"><td class="noborder">Sales Rep</td><td class="noborder">${esc(inv.salesPerson)}</td></tr>
+          <tr class="noborder"><td class="noborder">Bkg Given By</td><td class="noborder">${esc(bookingGivenByDisplay)}</td></tr>
+          <tr class="noborder"><td class="noborder">Sales Rep</td><td class="noborder">${esc(salesPersonDisplay)}</td></tr>
         </table>
       </td>
       <td style="width:34%">
-        <div class="bold">${esc(inv.client)}</div>
+        <div class="bold">${esc(first.client)}</div>
         ${clientMaster.address ? '<div class="small">' + esc(clientMaster.address) + '</div>' : ''}
         ${(clientMaster.city || clientMaster.country) ? '<div class="small">' + esc([clientMaster.city, clientMaster.country].filter(Boolean).join(', ')) + '</div>' : ''}
         ${clientMaster.state ? '<div style="margin-top:6px">State Name: <b>' + esc(clientMaster.state) + '</b></div>' : ''}
@@ -2727,28 +2862,18 @@ function buildInvoicePrintHtml_(inv){
     </tr>
   </table>
 
-  <table style="margin-top:6px">
-    <tr><td class="bold">Hotel Name: ${esc(inv.hotelName)}</td><td class="bold" style="width:25%">Country: ${esc(inv.country)}</td><td class="bold" style="width:25%">City: ${esc(inv.city)}</td></tr>
-  </table>
+  ${hotelHeaderBlock}
 
   <table style="margin-top:6px">
-    <tr class="boxhead">
-      <td>Guest Name</td><td>No of Room</td><td>Room Type</td><td>Arrival Date</td><td>Departure Date</td>
-      <td>Cur Code</td><td>No of Night</td><td>Rate Per Night</td><td>Total In FE</td><td>ROE</td><td>Total Amount LC</td>
-    </tr>
-    <tr>
-      <td>${esc(inv.guestName)}</td><td class="center">1</td><td>${esc(inv.roomType)}</td>
-      <td>${esc(toDisplayDate(inv.checkin) || inv.checkin)}</td><td>${esc(toDisplayDate(inv.checkout) || inv.checkout)}</td>
-      <td class="center">${esc(inv.currency||'INR')}</td><td class="center">${nights}</td>
-      <td class="right">${r2(ratePerNightFE)}</td><td class="right">${r2(feTotal)}</td><td class="right">${r2(roe)}</td><td class="right">${r2(lcTotal)}</td>
-    </tr>
+    ${lineItemHeader}
+    ${lineItemRows}
   </table>
 
   <table style="margin-top:6px">
     <tr><td style="width:60%">HSN 998559</td><td class="right bold">TOTAL:</td><td class="right" style="width:15%">${r2(lcTotal)}</td></tr>
     <tr><td class="noborder" style="border:none"></td><td class="right">Service Charge (+):</td><td class="right">${r2(serviceChargeLC)}</td></tr>
     <tr><td class="noborder" style="border:none"></td><td class="right">(+) Round off Amt.:</td><td class="right">${r2(roundOff)}</td></tr>
-    <tr><td class="noborder" style="border:none"></td><td class="right">(+) GST${inv.gstPercent ? ' (' + esc(inv.gstPercent) + '%)' : ''}:</td><td class="right">${r2(gstLC)}</td></tr>
+    <tr><td class="noborder" style="border:none"></td><td class="right">(+) GST${gstPercentDisplay && gstPercentDisplay !== 'Multiple' ? ' (' + esc(gstPercentDisplay) + '%)' : ''}:</td><td class="right">${r2(gstLC)}</td></tr>
     <tr><td class="noborder" style="border:none"></td><td class="right bold">Amount Payable:</td><td class="right bold">${r2(amountPayable)}</td></tr>
   </table>
 
@@ -3855,22 +3980,46 @@ function renderDsrSearchResults_(matches, emptyMessage){
   }
   empty.style.display = 'none';
 
-  results.innerHTML = matches.map(row => {
+  // Group by document number — a Consolidated invoice has several rows
+  // sharing one number, and should show as ONE card, not several
+  // confusingly-identical ones.
+  const groups = [];
+  const byNumber = {};
+  matches.forEach(row => {
     const docNumber = String(dsrCellValue_(row, 'docNumber'));
-    const type = dsrCellValue_(row, 'documentType');
-    const meta = [row.client, row.hotelName, row.guestName].filter(Boolean).join(' — ');
-    const dates = (toDisplayDate(row.checkin) || '') + ' → ' + (toDisplayDate(row.checkout) || '');
-    const confLine = row.confirmationNumber ? (' · Conf# ' + escapeHtml(String(row.confirmationNumber))) : '';
+    if (!byNumber[docNumber]) { byNumber[docNumber] = []; groups.push(byNumber[docNumber]); }
+    byNumber[docNumber].push(row);
+  });
+
+  results.innerHTML = groups.map(rows => {
+    const first = rows[0];
+    const docNumber = String(dsrCellValue_(first, 'docNumber'));
+    const type = dsrCellValue_(first, 'documentType');
+    const isConsolidated = rows.length > 1;
+
+    let meta, dates, extraLine;
+    if (isConsolidated) {
+      meta = escapeHtml(first.client || '') + ' <span style="color:#8a93a0">— Consolidated, ' + rows.length + ' bookings</span>';
+      dates = rows.map(r => escapeHtml(r.hotelName||'') + ' (' + (toDisplayDate(r.checkin)||'') + ' → ' + (toDisplayDate(r.checkout)||'') + ')').join(' · ');
+      extraLine = '';
+    } else {
+      meta = escapeHtml([first.client, first.hotelName, first.guestName].filter(Boolean).join(' — '));
+      dates = escapeHtml((toDisplayDate(first.checkin) || '') + ' → ' + (toDisplayDate(first.checkout) || ''));
+      extraLine = first.confirmationNumber ? (' · Conf# ' + escapeHtml(String(first.confirmationNumber))) : '';
+    }
+
     return '<div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding:12px 16px;margin-bottom:8px">' +
       '<div>' +
         '<b>' + escapeHtml(docNumber) + '</b> <span style="color:#8a93a0;font-size:12px">(' + escapeHtml(String(type)) + ')</span><br>' +
-        '<span style="font-size:13px;color:#3f4750">' + escapeHtml(meta) + '</span><br>' +
-        '<span style="font-size:12px;color:#8a93a0">' + escapeHtml(dates) + confLine + '</span>' +
+        '<span style="font-size:13px;color:#3f4750">' + meta + '</span><br>' +
+        '<span style="font-size:12px;color:#8a93a0">' + dates + extraLine + '</span>' +
       '</div>' +
       '<div style="display:flex;gap:6px">' +
         '<button onclick="dsrPreviewEntry_(\'' + encodeURIComponent(docNumber) + '\')" style="padding:6px 12px;font-size:12px">Preview</button>' +
         '<button onclick="dsrOpenEntry_(\'' + encodeURIComponent(docNumber) + '\')" style="padding:6px 12px;font-size:12px">Open</button>' +
-        '<button onclick="openInvoiceModalForNumber(\'' + escapeHtml(docNumber) + '\')" style="padding:6px 12px;font-size:12px">Edit</button>' +
+        (isConsolidated
+          ? '<button onclick="dsrPreviewEntry_(\'' + encodeURIComponent(docNumber) + '\')" style="padding:6px 12px;font-size:12px">Edit a Booking</button>'
+          : '<button onclick="openInvoiceModalForNumber(\'' + escapeHtml(docNumber) + '\',0)" style="padding:6px 12px;font-size:12px">Edit</button>') +
       '</div>' +
     '</div>';
   }).join('');
@@ -3880,29 +4029,49 @@ function renderDsrSearchResults_(matches, emptyMessage){
 async function dsrPreviewEntry_(encodedDocNumber){
   const docNumber = decodeURIComponent(encodedDocNumber);
   try{
-    const json = await apiGet({ action:'invoiceByNumber', documentNumber:docNumber });
-    const inv = json.invoice;
-    if (!inv) { alert('Could not find that entry.'); return; }
+    const json = await apiGet({ action:'invoicesByNumber', documentNumber:docNumber });
+    const rows = json.invoices || [];
+    if (!rows.length) { alert('Could not find that entry.'); return; }
+    const first = rows[0];
     const overlay = document.getElementById('invoiceFieldConfigModalOverlay');
     const fieldRow = (label, value) => '<tr><td style="padding:4px 10px 4px 0;color:#8a93a0;white-space:nowrap;vertical-align:top">' + escapeHtml(label) + '</td><td style="padding:4px 0;font-weight:600">' + escapeHtml(String(value || '')) + '</td></tr>';
-    overlay.innerHTML =
-      '<div style="max-width:460px;margin:40px auto;background:#fff;border-radius:10px;padding:22px">' +
-        '<h2 style="margin-top:0;color:#003366">Preview — ' + escapeHtml(String(dsrCellValue_(inv, 'docNumber'))) + '</h2>' +
+
+    let body;
+    if (rows.length > 1) {
+      const combinedTotal = rows.reduce((s, inv) => s + (Number(inv.totalAmount)||0), 0);
+      body =
+        '<p style="color:#4a5560;font-size:12px;margin:4px 0 10px">Consolidated — ' + rows.length + ' bookings under this number.</p>' +
+        rows.map((inv, i) => '<div style="border:1px solid #eee;border-radius:6px;padding:8px 10px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+          '<div style="font-size:12px"><b>' + escapeHtml(inv.hotelName||'') + '</b> — ' + escapeHtml(inv.guestName||'') + '<br>' +
+          '<span style="color:#8a93a0">' + escapeHtml(toDisplayDate(inv.checkin)||'') + ' → ' + escapeHtml(toDisplayDate(inv.checkout)||'') + ' · ' + (Number(inv.totalAmount)||0).toFixed(2) + ' ' + (inv.settlementCurrency||inv.currency||'INR') + '</span></div>' +
+          '<button onclick="closeCvDetailModal_(); openInvoiceModalForNumber(\'' + escapeHtml(docNumber) + '\',' + i + ')" style="padding:5px 10px;font-size:12px">Edit</button>' +
+        '</div>').join('') +
+        '<div style="text-align:right;font-weight:600;margin-top:6px">Combined Total: ' + combinedTotal.toFixed(2) + ' ' + (first.settlementCurrency||first.currency||'INR') + '</div>';
+    } else {
+      body =
         '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
-          fieldRow('Type', inv.documentType || 'Invoice') +
-          fieldRow('Client', inv.client) +
-          fieldRow('Hotel', inv.hotelName) +
-          fieldRow('Guest', inv.guestName) +
-          fieldRow('Check In', toDisplayDate(inv.checkin)) +
-          fieldRow('Check Out', toDisplayDate(inv.checkout)) +
-          fieldRow('City', inv.city) +
-          fieldRow('Confirmation #', inv.confirmationNumber) +
-          fieldRow('Billing', inv.billingType) +
-          fieldRow('Total', (Number(inv.totalAmount)||0).toFixed(2) + ' ' + (inv.settlementCurrency || inv.currency || 'INR')) +
+          fieldRow('Type', first.documentType || 'Invoice') +
+          fieldRow('Client', first.client) +
+          fieldRow('Hotel', first.hotelName) +
+          fieldRow('Guest', first.guestName) +
+          fieldRow('Check In', toDisplayDate(first.checkin)) +
+          fieldRow('Check Out', toDisplayDate(first.checkout)) +
+          fieldRow('City', first.city) +
+          fieldRow('Confirmation #', first.confirmationNumber) +
+          fieldRow('Billing', first.billingType) +
+          fieldRow('Total', (Number(first.totalAmount)||0).toFixed(2) + ' ' + (first.settlementCurrency || first.currency || 'INR')) +
         '</table>' +
         '<div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">' +
+          '<button onclick="closeCvDetailModal_(); openInvoiceModalForNumber(\'' + escapeHtml(docNumber) + '\',0)" style="padding:9px 16px">Edit</button>' +
+        '</div>';
+    }
+
+    overlay.innerHTML =
+      '<div style="max-width:460px;margin:40px auto;background:#fff;border-radius:10px;padding:22px">' +
+        '<h2 style="margin-top:0;color:#003366">Preview — ' + escapeHtml(String(dsrCellValue_(first, 'docNumber'))) + '</h2>' +
+        body +
+        '<div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">' +
           '<button onclick="dsrOpenEntry_(\'' + encodeURIComponent(docNumber) + '\')" style="padding:9px 16px">Open Full Invoice</button>' +
-          '<button onclick="closeCvDetailModal_(); openInvoiceModalForNumber(\'' + escapeHtml(docNumber) + '\')" style="padding:9px 16px">Edit</button>' +
           '<button onclick="closeCvDetailModal_()" style="padding:9px 16px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Close</button>' +
         '</div>' +
       '</div>';
@@ -3914,14 +4083,16 @@ async function dsrPreviewEntry_(encodedDocNumber){
 
 // Open — the full printable invoice/proforma in a new tab, view-only
 // (no auto-print, unlike printInvoiceByNumber_ used elsewhere).
+// Consolidated-aware: fetches every row for this number and shows them
+// as one document, same as Print.
 async function dsrOpenEntry_(encodedDocNumber){
   const docNumber = decodeURIComponent(encodedDocNumber);
   try{
-    const json = await apiGet({ action:'invoiceByNumber', documentNumber:docNumber });
-    const inv = json.invoice;
-    if (!inv) { alert('Could not find that entry to open.'); return; }
-    if (inv.documentType === 'Credit Note') { alert('Printable Credit Note format isn\'t built yet — this covers Invoices and Proformas.'); return; }
-    const html = buildInvoicePrintHtml_(inv);
+    const json = await apiGet({ action:'invoicesByNumber', documentNumber:docNumber });
+    const rows = json.invoices || [];
+    if (!rows.length) { alert('Could not find that entry to open.'); return; }
+    if (rows[0].documentType === 'Credit Note') { alert('Printable Credit Note format isn\'t built yet — this covers Invoices and Proformas.'); return; }
+    const html = buildInvoicePrintHtml_(rows);
     const w = window.open('', '_blank');
     w.document.write(html);
     w.document.close();
@@ -3930,20 +4101,20 @@ async function dsrOpenEntry_(encodedDocNumber){
   }
 }
 
-async function duplicateInvoiceAction_(invoiceNumber){
+async function duplicateInvoiceAction_(invoiceNumber, occurrenceIndex){
   if (!confirm('Duplicate ' + invoiceNumber + '? This creates a new entry with a fresh invoice number.')) return;
   try{
-    await apiPost({ action:'duplicateInvoice', invoiceNumber:invoiceNumber, actor:currentUser });
+    await apiPost({ action:'duplicateInvoice', invoiceNumber:invoiceNumber, occurrenceIndex:(occurrenceIndex||0), actor:currentUser });
     await loadAndRenderDsr();
   }catch(err){
     alert('Could not duplicate.\n\n' + (err.message || err));
   }
 }
 
-async function deleteInvoiceAction_(documentNumber){
+async function deleteInvoiceAction_(documentNumber, occurrenceIndex){
   if (!confirm('Delete ' + documentNumber + '? This cannot be undone.')) return;
   try{
-    await apiPost({ action:'deleteInvoice', invoiceNumber:documentNumber, actor:currentUser });
+    await apiPost({ action:'deleteInvoice', invoiceNumber:documentNumber, occurrenceIndex:(occurrenceIndex||0), actor:currentUser });
     await loadAndRenderDsr();
   }catch(err){
     alert('Could not delete.\n\n' + (err.message || err));
