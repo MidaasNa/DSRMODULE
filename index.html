@@ -2112,12 +2112,12 @@ function computeInvoiceTotalsClient_(f){
   const profit = totalMarkup + commissionAmount + serviceCharge - reward;
   const profitPercent = totalBilled > 0 ? (profit/totalBilled)*100 : 0;
 
-  // Total Amount follows Billing Instructions, not the Currency dropdown —
-  // "...-INR" always converts via ROE; any other "...-XXX" suffix is shown
-  // as-is in that currency (see the matching comment on computeInvoiceTotals_
-  // in Code.gs for the full rule, including its assumptions/limits).
+  // Total Amount is shown in whatever currency Billing Instructions says
+  // to settle in — but ROE always applies to get there from the entry's
+  // own Currency, regardless of which currency that is (see the matching
+  // comment on computeInvoiceTotals_ in Code.gs for the full rule).
   const settlementCurrency = parseSettlementCurrencyClient_(f.billingInstruction) || f.currency || 'INR';
-  const totalAmount = settlementCurrency === 'INR' ? totalBilledINR : totalBilled;
+  const totalAmount = totalBilledINR;
 
   const r2 = n => Math.round(n*100)/100;
   return { nights, totalRoomCost:r2(totalRoomCost), totalMarkup:r2(totalMarkup), taxAmount:r2(taxAmount),
@@ -2763,12 +2763,12 @@ function buildInvoicePrintHtml_(rowsOrInv){
   const r2 = n => (Math.round((Number(n)||0) * 100) / 100).toFixed(2);
 
   // Which currency the client actually gets billed in follows Billing
-  // Instructions, not the room-rate Currency field — "...-INR" (or
-  // DIRECT) settles in INR via ROE conversion; "...-USD/EUR/GBP"
-  // settles directly in that currency, unconverted. Backend already
-  // computes this per row as settlementCurrency/totalAmount (see
-  // computeInvoiceTotals_ in Code.gs) — this mirrors that choice for
-  // the printed amounts instead of unconditionally converting via ROE.
+  // Instructions, not the room-rate Currency field. ROE always applies —
+  // it's the rate FROM the entry's own Currency TO the settlement
+  // currency, whatever that is (e.g. Currency=MYR, ROE=MYR→USD, Billing
+  // Instructions=BTC-USD — not necessarily a rate to INR). Only the
+  // final whole-number rounding is INR-specific (see amountPayable
+  // below) — the conversion itself always happens.
   const settlementCurrency = first.settlementCurrency || 'INR';
   const settleInINR = settlementCurrency === 'INR';
 
@@ -2781,11 +2781,10 @@ function buildInvoicePrintHtml_(rowsOrInv){
     // rate, never the cost/markup split behind it.
     const feTotal = (Number(inv.netHotelCost)||0) + (Number(inv.totalMarkup)||0);
     const ratePerNightFE = nights > 0 ? feTotal / nights : feTotal;
-    // Settlement-currency amounts — ROE-converted only when settling in
-    // INR; shown as-is (already in that FE currency) otherwise.
-    const totalSettle = settleInINR ? feTotal * roe : feTotal;
-    const serviceChargeSettle = settleInINR ? (Number(inv.serviceCharge)||0) * roe : (Number(inv.serviceCharge)||0);
-    const gstSettle = settleInINR ? (Number(inv.gstAmount)||0) * roe : (Number(inv.gstAmount)||0);
+    // Settlement-currency amounts — ROE always applies here.
+    const totalSettle = feTotal * roe;
+    const serviceChargeSettle = (Number(inv.serviceCharge)||0) * roe;
+    const gstSettle = (Number(inv.gstAmount)||0) * roe;
     return { inv, roe, nights, feTotal, ratePerNightFE, totalSettle, serviceChargeSettle, gstSettle };
   });
 
@@ -3916,7 +3915,7 @@ const DSR_COLUMNS_ = [
   ['serviceCharge','Svc Charge',90,false], ['reward','Rewards',80,false], ['billingInstruction','Billing Instr.',105,true],
   ['totalRoomCost','Total Room Cost',110,false], ['totalMarkup','Total Markup',105,false], ['commissionAmount','Commission Amt',105,false],
   ['netHotelCost','Net Hotel Cost',110,false], ['sellingPrice','Selling Price',110,true],
-  ['gstAmount','GST Amt',90,false], ['totalBilled','Total Billed',110,true], ['totalBilledINR','Total (INR)',110,false],
+  ['gstAmount','GST Amt',90,false], ['totalBilled','Total Billed',110,true], ['totalBilledINR','Total × ROE',110,false],
   ['totalAmount','Total Amount',130,true], ['settlementCurrency','Settlement Ccy',100,false],
   ['profit','Profit',95,true], ['profitPercent','Profit %',80,true],
   ['referenceInvoiceNumber','Ref. Invoice #',110,false], ['creditAmount','Credit Amount',105,false], ['creditReason','Credit Reason',150,false],
