@@ -2002,6 +2002,31 @@ window._vendorsList = [];  // ['Vendor A', 'Vendor B', ...]
 window._pendingBookings = [];
 window._nextBookingSeed = null;
 
+// This app's own field suggestions (e.g. the Client/Vendor Name
+// datalists) should be the only dropdown that shows up while typing —
+// the BROWSER's own remembered values for these fields (its address-
+// bar-style autofill history) are a different, unrelated set of old
+// entries and just cause confusion. autocomplete="off" is the standard
+// way to suppress that, but with 40+ fields spread across several
+// modals it's easy to miss one, and any field added later would need
+// it too. Instead, this watches the whole page and stamps
+// autocomplete="off" onto every input/select/textarea the app ever
+// renders, the moment it appears — covers every modal automatically,
+// forever, with nothing to remember per-field. Datalist-based
+// suggestions (the app's own) are unaffected; only the browser's own
+// history dropdown is suppressed.
+(function(){
+  function disableAutofill_(node){
+    if (node.nodeType !== 1) return;
+    if (node.matches && node.matches('input,select,textarea')) node.setAttribute('autocomplete','off');
+    if (node.querySelectorAll) node.querySelectorAll('input,select,textarea').forEach(el => el.setAttribute('autocomplete','off'));
+  }
+  new MutationObserver(muts => {
+    muts.forEach(m => m.addedNodes.forEach(disableAutofill_));
+  }).observe(document.documentElement, { childList:true, subtree:true });
+  document.addEventListener('DOMContentLoaded', () => disableAutofill_(document.body));
+})();
+
 const HOTEL_CHAINS_ = ['Marriott','Hilton','IHG','Accor','Hyatt','Radisson','Taj','Oberoi','ITC','Lemon Tree','Other'];
 const CURRENCIES_ = ['INR','USD','EUR','GBP','AED','SGD','MYR','AUD'];
 const BILLING_INSTRUCTIONS_ = ['BTC-INR','BTC-USD','BTC-EUR','BTC-GBP','DIRECT','Other'];
@@ -2283,7 +2308,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
             '</div>') +
             invoiceFieldRow_('Sales Person Name *', '<input id="inv_salesPerson" value="' + escapeHtml(v.salesPerson || (rec&&rec.handled) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
           '</div>' +
-          invoiceFieldRow_('Remarks *', '<textarea id="inv_remarks" rows="2" style="width:100%;padding:5px;box-sizing:border-box">' + escapeHtml(v.remarks || (rec&&rec.remarks) || '') + '</textarea>') +
+          invoiceFieldRow_('Remarks', '<textarea id="inv_remarks" rows="2" style="width:100%;padding:5px;box-sizing:border-box">' + escapeHtml(v.remarks || (rec&&rec.remarks) || '') + '</textarea>') +
 
           invoiceSectionHeader_('6. Custom Charges') +
           '<div style="font-size:11px;color:#8a93a0;margin-bottom:6px">Remarks only — doesn\'t affect Selling Price, Total Billed, or Profit. Use Service Charge above for anything that needs to actually be billed.</div>' +
@@ -2522,13 +2547,14 @@ function recalcInvoiceTotals_(){
     '<span style="color:#4a5560">Commission (from hotel): ' + t.commissionAmount.toFixed(2) + ' &nbsp;·&nbsp; Profit: ' + t.profit.toFixed(2) + ' (' + t.profitPercent.toFixed(1) + '%)</span>';
 }
 
-// Every field is mandatory except Children and Rewards (and Custom
-// Charges — that's a free-form remarks table, not a single value, so
-// there's nothing sensible to "require" there). Checked as plain
-// non-empty here rather than via HTML5 required attributes, since two
-// fields (Hotel Chain / Billing Instructions "Other") only need to be
-// filled conditionally, and a single consolidated message listing
-// everything missing at once is clearer than one native bubble at a time.
+// Every field is mandatory except Children, Rewards, and Remarks (and
+// Custom Charges — that's a free-form remarks table, not a single
+// value, so there's nothing sensible to "require" there). Checked as
+// plain non-empty here rather than via HTML5 required attributes,
+// since two fields (Hotel Chain / Billing Instructions "Other") only
+// need to be filled conditionally, and a single consolidated message
+// listing everything missing at once is clearer than one native
+// bubble at a time.
 const INVOICE_REQUIRED_FIELDS_ = [
   ['inv_branch','Branch'], ['inv_client','Client Name'], ['inv_vendorName','Vendor Name'],
   ['inv_hotelName','Hotel Name'], ['inv_guestName','Guest Name'],
@@ -2538,8 +2564,7 @@ const INVOICE_REQUIRED_FIELDS_ = [
   ['inv_pricePerNight','Price Per Night'], ['inv_markupPerNight','Markup Per Night'], ['inv_roe','ROE'],
   ['inv_gstPercent','GST %'], ['inv_taxPercent','Tax Charged by Hotel (%)'],
   ['inv_commission','Commission %'], ['inv_serviceCharge','Service Charge'],
-  ['inv_confirmationNumber','Confirmation Number'], ['inv_salesPerson','Sales Person Name'],
-  ['inv_remarks','Remarks']
+  ['inv_confirmationNumber','Confirmation Number'], ['inv_salesPerson','Sales Person Name']
 ];
 
 function validateInvoiceFormRequired_(){
