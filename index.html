@@ -2269,7 +2269,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
       '</div>' +
 
       invoiceSectionHeader_('1. Billing Information') +
-      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
+      '<div style="display:grid;grid-template-columns:1fr;gap:4px">' +
         invoiceFieldRow_('Billing Type', '<select id="inv_billingType" style="width:100%;padding:5px" ' + (existing?'disabled':'') + ' onchange="onInvoiceBranchChange_();recalcInvoiceTotals_()">' +
           ['DIRECT','BTC'].map(o => '<option' + (v.billingType===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
         invoiceFieldRow_((existing && existing.documentType === 'Proforma') ? 'Proforma Number' : 'Invoice Number', '<input disabled value="' + (existing ? escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') : 'Generated on Create/Save as Proforma') + '" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
@@ -2282,7 +2282,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
       '</div>' +
 
       invoiceSectionHeader_('2. Stay Details') +
-      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
+      '<div style="display:grid;grid-template-columns:1fr;gap:4px">' +
         invoiceFieldRow_('Check In *', '<input type="date" id="inv_checkin" value="' + escapeHtml(checkin) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
         invoiceFieldRow_('Check Out *', '<input type="date" id="inv_checkout" value="' + escapeHtml(checkout) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
         invoiceFieldRow_('Nights (auto)', '<input disabled id="inv_nightsDisplay" value="" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
@@ -2298,7 +2298,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
       '</div>' +
 
       invoiceSectionHeader_('3. Pricing') +
-      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
+      '<div style="display:grid;grid-template-columns:1fr;gap:4px">' +
         invoiceFieldRow_('Price Per Night *', '<input type="number" step="0.01" id="inv_pricePerNight" value="' + escapeHtml(String(v.pricePerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
         invoiceFieldRow_('Markup Per Night *', '<input type="number" step="0.01" id="inv_markupPerNight" value="' + escapeHtml(String(v.markupPerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
         invoiceFieldRow_('Currency', '<select id="inv_currency" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_roe\').value = this.value===\'INR\'?1:document.getElementById(\'inv_roe\').value; recalcInvoiceTotals_()">' +
@@ -2307,7 +2307,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
       '</div>' +
 
       invoiceSectionHeader_('4. Billing') +
-      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
+      '<div style="display:grid;grid-template-columns:1fr;gap:4px">' +
         invoiceFieldRow_('Billing Instructions *', '<select id="inv_billingInstruction" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_billingInstructionOther\').style.display=this.value===\'Other\'?\'block\':\'none\';recalcInvoiceTotals_()">' +
           BILLING_INSTRUCTIONS_.map(o => '<option' + (v.billingInstruction===o?' selected':'') + '>' + o + '</option>').join('') + '</select>' +
           '<input id="inv_billingInstructionOther" placeholder="Enter billing instruction" value="' + (BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1?escapeHtml(v.billingInstruction||''):'') + '" style="width:100%;padding:5px;margin-top:3px;box-sizing:border-box;display:' + (v.billingInstruction && BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1 ? 'block':'none') + '" oninput="recalcInvoiceTotals_()">') +
