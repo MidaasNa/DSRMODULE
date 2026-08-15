@@ -2141,13 +2141,26 @@ function computeInvoiceTotalsClient_(f){
 }
 
 
+// Compact mode: no separate label row above each field — the label
+// becomes the field's placeholder text (inputs/textareas) or a hover
+// tooltip (dropdowns, which have no real placeholder) instead, so the
+// whole form takes much less vertical space. Only matches a field
+// whose HTML starts directly with the tag (a composite field wrapped
+// in its own <div>, like Confirmation Number's input+button pair,
+// sets its own placeholder at the call site instead).
 function invoiceFieldRow_(labelText, inputHtml){
-  return '<div style="margin-bottom:7px"><label style="display:block;font-size:11px;font-weight:600;color:#3f4750;margin-bottom:2px">' +
-    escapeHtml(labelText) + '</label>' + inputHtml + '</div>';
+  const label = escapeHtml(labelText);
+  let html = inputHtml;
+  if (/^<(input|textarea)\b/i.test(html) && !/\splaceholder=/i.test(html)) {
+    html = html.replace(/^<(input|textarea)\b/i, '<$1 placeholder="' + label + '"');
+  } else if (/^<select\b/i.test(html) && !/\stitle=/i.test(html)) {
+    html = html.replace(/^<select\b/i, '<select title="' + label + '"');
+  }
+  return '<div style="margin-bottom:6px">' + html + '</div>';
 }
 
 function invoiceSectionHeader_(text){
-  return '<h4 style="color:#003366;border-bottom:1px solid #eee;padding-bottom:3px;margin:12px 0 8px">' + escapeHtml(text) + '</h4>';
+  return '<h4 style="color:#003366;border-bottom:1px solid #eee;padding-bottom:2px;margin:10px 0 6px;font-size:12px">' + escapeHtml(text) + '</h4>';
 }
 
 /* rowId is null for a standalone "+ New Entry" DSR entry, or a ticket's
@@ -2259,7 +2272,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
       savedNotice +
       pendingBar +
 
-      '<div style="max-width:640px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:0 10px">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px;margin-bottom:10px">' +
         invoiceFieldRow_('Branch *', '<select id="inv_branch" style="width:100%;padding:5px" onchange="onInvoiceBranchChange_()">' +
           '<option value="">— Select Branch —</option>' +
           knownBranches_().map(b => '<option' + ((v.branch || (rec&&rec.branch) || currentUser.branch)===b?' selected':'') + '>' + escapeHtml(b) + '</option>').join('') + '</select>') +
@@ -2268,11 +2281,15 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
           : '') +
       '</div>' +
 
-      '<div style="display:grid;grid-template-columns:1fr;gap:0;align-items:start;max-width:640px">' +
+      // Two real side-by-side columns using the modal's full width —
+      // previously both halves were stacked vertically inside a single
+      // 640px-wide column, which is what forced all the scrolling even
+      // though the modal itself is ~1600px wide.
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 20px;align-items:start">' +
 
         '<div>' +
           invoiceSectionHeader_('1. Billing Information') +
-          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
             invoiceFieldRow_('Billing Type', '<select id="inv_billingType" style="width:100%;padding:5px" ' + (existing?'disabled':'') + ' onchange="onInvoiceBranchChange_();recalcInvoiceTotals_()">' +
               ['DIRECT','BTC'].map(o => '<option' + (v.billingType===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
             invoiceFieldRow_((existing && existing.documentType === 'Proforma') ? 'Proforma Number' : 'Invoice Number', '<input disabled value="' + (existing ? escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') : 'Generated on Create/Save as Proforma') + '" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
@@ -2285,7 +2302,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
           '</div>' +
 
           invoiceSectionHeader_('2. Stay Details') +
-          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
             invoiceFieldRow_('Check In *', '<input type="date" id="inv_checkin" value="' + escapeHtml(checkin) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Check Out *', '<input type="date" id="inv_checkout" value="' + escapeHtml(checkout) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Nights (auto)', '<input disabled id="inv_nightsDisplay" value="" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
@@ -2307,7 +2324,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
 
         '<div>' +
           invoiceSectionHeader_('4. Pricing') +
-          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px 10px">' +
             invoiceFieldRow_('Price Per Night *', '<input type="number" step="0.01" id="inv_pricePerNight" value="' + escapeHtml(String(v.pricePerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Markup Per Night *', '<input type="number" step="0.01" id="inv_markupPerNight" value="' + escapeHtml(String(v.markupPerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Currency', '<select id="inv_currency" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_roe\').value = this.value===\'INR\'?1:document.getElementById(\'inv_roe\').value; recalcInvoiceTotals_()">' +
@@ -2316,7 +2333,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
           '</div>' +
 
           invoiceSectionHeader_('5. Billing') +
-          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px">' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
             invoiceFieldRow_('Billing Instructions *', '<select id="inv_billingInstruction" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_billingInstructionOther\').style.display=this.value===\'Other\'?\'block\':\'none\';recalcInvoiceTotals_()">' +
               BILLING_INSTRUCTIONS_.map(o => '<option' + (v.billingInstruction===o?' selected':'') + '>' + o + '</option>').join('') + '</select>' +
               '<input id="inv_billingInstructionOther" placeholder="Enter billing instruction" value="' + (BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1?escapeHtml(v.billingInstruction||''):'') + '" style="width:100%;padding:5px;margin-top:3px;box-sizing:border-box;display:' + (v.billingInstruction && BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1 ? 'block':'none') + '" oninput="recalcInvoiceTotals_()">') +
@@ -2328,7 +2345,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
             invoiceFieldRow_('Service Charge *', '<input type="number" step="0.01" id="inv_serviceCharge" value="' + escapeHtml(String(v.serviceCharge ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Rewards (optional)', '<input type="number" step="0.01" id="inv_reward" value="' + escapeHtml(String(v.reward ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
             invoiceFieldRow_('Confirmation Number *', '<div style="display:flex;gap:6px">' +
-              '<input id="inv_confirmationNumber" value="' + escapeHtml(v.confirmationNumber || (rec&&rec.confirmationNumber) || '') + '" style="flex:1;padding:5px;box-sizing:border-box">' +
+              '<input id="inv_confirmationNumber" placeholder="Confirmation Number *" value="' + escapeHtml(v.confirmationNumber || (rec&&rec.confirmationNumber) || '') + '" style="flex:1;padding:5px;box-sizing:border-box">' +
               '<button type="button" onclick="validateConfirmationNumber_(\'' + (existing ? existing.invoiceNumber || '' : '') + '\')" style="padding:5px 10px;font-size:12px;white-space:nowrap">Validate</button>' +
             '</div>') +
             invoiceFieldRow_('Sales Person Name *', '<input id="inv_salesPerson" value="' + escapeHtml(v.salesPerson || (rec&&rec.handled) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
