@@ -2762,8 +2762,17 @@ function buildInvoicePrintHtml_(rowsOrInv){
   const isConsolidated = list.length > 1;
   const r2 = n => (Math.round((Number(n)||0) * 100) / 100).toFixed(2);
 
-  // Per-booking numbers, computed exactly as before — just once per
-  // row instead of once for the whole document.
+  // Which currency the client actually gets billed in follows Billing
+  // Instructions, not the room-rate Currency field — "...-INR" (or
+  // DIRECT) settles in INR via ROE conversion; "...-USD/EUR/GBP"
+  // settles directly in that currency, unconverted. Backend already
+  // computes this per row as settlementCurrency/totalAmount (see
+  // computeInvoiceTotals_ in Code.gs) — this mirrors that choice for
+  // the printed amounts instead of unconditionally converting via ROE.
+  const settlementCurrency = first.settlementCurrency || 'INR';
+  const settleInINR = settlementCurrency === 'INR';
+
+  // Per-booking numbers.
   const lines = list.map(inv => {
     const roe = Number(inv.roe) || 1;
     const nights = Number(inv.nights) || 0;
@@ -2772,17 +2781,19 @@ function buildInvoicePrintHtml_(rowsOrInv){
     // rate, never the cost/markup split behind it.
     const feTotal = (Number(inv.netHotelCost)||0) + (Number(inv.totalMarkup)||0);
     const ratePerNightFE = nights > 0 ? feTotal / nights : feTotal;
-    const lcTotal = feTotal * roe;
-    const serviceChargeLC = (Number(inv.serviceCharge)||0) * roe;
-    const gstLC = (Number(inv.gstAmount)||0) * roe;
-    return { inv, roe, nights, feTotal, ratePerNightFE, lcTotal, serviceChargeLC, gstLC };
+    // Settlement-currency amounts — ROE-converted only when settling in
+    // INR; shown as-is (already in that FE currency) otherwise.
+    const totalSettle = settleInINR ? feTotal * roe : feTotal;
+    const serviceChargeSettle = settleInINR ? (Number(inv.serviceCharge)||0) * roe : (Number(inv.serviceCharge)||0);
+    const gstSettle = settleInINR ? (Number(inv.gstAmount)||0) * roe : (Number(inv.gstAmount)||0);
+    return { inv, roe, nights, feTotal, ratePerNightFE, totalSettle, serviceChargeSettle, gstSettle };
   });
 
   // Combined totals across every booking on this document.
-  const lcTotal = lines.reduce((s,l) => s + l.lcTotal, 0);
-  const serviceChargeLC = lines.reduce((s,l) => s + l.serviceChargeLC, 0);
-  const gstLC = lines.reduce((s,l) => s + l.gstLC, 0);
-  const preRoundTotal = lcTotal + serviceChargeLC + gstLC;
+  const total = lines.reduce((s,l) => s + l.totalSettle, 0);
+  const serviceChargeTotal = lines.reduce((s,l) => s + l.serviceChargeSettle, 0);
+  const gstTotal = lines.reduce((s,l) => s + l.gstSettle, 0);
+  const preRoundTotal = total + serviceChargeTotal + gstTotal;
   const amountPayable = Math.round(preRoundTotal);
   const roundOff = amountPayable - preRoundTotal;
 
@@ -2807,18 +2818,28 @@ function buildInvoicePrintHtml_(rowsOrInv){
 
   const esc = s => escapeHtml(String(s == null ? '' : s));
   // A few header fields (Confirmation #, Booking Given By, Sales Rep,
-  // GST %) are per-booking — show the shared value when every booking
-  // on this document agrees, otherwise "Multiple" rather than picking
-  // one arbitrarily.
+  // GST %, Settlement Currency) are per-booking — show the shared
+  // value when every booking on this document agrees, otherwise
+  // "Multiple" rather than picking one arbitrarily.
   const sharedOrMultiple = key => list.every(inv => String(inv[key]||'') === String(first[key]||'')) ? (first[key]||'') : 'Multiple';
   const confDisplay = sharedOrMultiple('confirmationNumber');
   const bookingGivenByDisplay = sharedOrMultiple('bookingGivenBy');
   const salesPersonDisplay = sharedOrMultiple('salesPerson');
   const gstPercentDisplay = sharedOrMultiple('gstPercent');
+  // On a Consolidated invoice, every booking's Billing Instructions
+  // should settle in the same currency (one client, one invoice, one
+  // currency) — but each booking's Billing Instructions is still its
+  // own field, so flag it rather than silently add mismatched
+  // currencies together if that assumption is ever wrong.
+  const settlementCurrencyDisplay = sharedOrMultiple('settlementCurrency') || settlementCurrency;
+  const mixedCurrencyWarning = settlementCurrencyDisplay === 'Multiple'
+    ? '<div style="margin:6px 0;padding:6px 10px;background:#fdecea;border:1px solid #f3c1bb;border-radius:4px;color:#8a2c22;font-size:11px">⚠ These bookings have different Billing Instructions currencies — the total below only adds ' + esc(settlementCurrency) + ' amounts correctly if they actually match. Please verify.</div>'
+    : '';
+  const totalColumnLabel = settleInINR ? 'Total Amount LC' : 'Total Amount (' + esc(settlementCurrency) + ')';
 
   const lineItemHeader = isConsolidated
-    ? '<tr class="boxhead"><td>Hotel</td><td>Guest Name</td><td>Room Type</td><td>Arrival Date</td><td>Departure Date</td><td>Cur Code</td><td>No of Night</td><td>Rate Per Night</td><td>Total In FE</td><td>ROE</td><td>Total Amount LC</td></tr>'
-    : '<tr class="boxhead"><td>Guest Name</td><td>No of Room</td><td>Room Type</td><td>Arrival Date</td><td>Departure Date</td><td>Cur Code</td><td>No of Night</td><td>Rate Per Night</td><td>Total In FE</td><td>ROE</td><td>Total Amount LC</td></tr>';
+    ? '<tr class="boxhead"><td>Hotel</td><td>Guest Name</td><td>Room Type</td><td>Arrival Date</td><td>Departure Date</td><td>Cur Code</td><td>No of Night</td><td>Rate Per Night</td><td>Total In FE</td><td>ROE</td><td>' + totalColumnLabel + '</td></tr>'
+    : '<tr class="boxhead"><td>Guest Name</td><td>No of Room</td><td>Room Type</td><td>Arrival Date</td><td>Departure Date</td><td>Cur Code</td><td>No of Night</td><td>Rate Per Night</td><td>Total In FE</td><td>ROE</td><td>' + totalColumnLabel + '</td></tr>';
 
   const lineItemRows = lines.map(l => {
     const inv = l.inv;
@@ -2829,7 +2850,7 @@ function buildInvoicePrintHtml_(rowsOrInv){
       '<td>' + esc(inv.roomType) + '</td>' +
       '<td>' + esc(toDisplayDate(inv.checkin) || inv.checkin) + '</td><td>' + esc(toDisplayDate(inv.checkout) || inv.checkout) + '</td>' +
       '<td class="center">' + esc(inv.currency||'INR') + '</td><td class="center">' + l.nights + '</td>' +
-      '<td class="right">' + r2(l.ratePerNightFE) + '</td><td class="right">' + r2(l.feTotal) + '</td><td class="right">' + r2(l.roe) + '</td><td class="right">' + r2(l.lcTotal) + '</td>' +
+      '<td class="right">' + r2(l.ratePerNightFE) + '</td><td class="right">' + r2(l.feTotal) + '</td><td class="right">' + r2(l.roe) + '</td><td class="right">' + r2(l.totalSettle) + '</td>' +
     '</tr>';
   }).join('');
 
@@ -2888,6 +2909,7 @@ function buildInvoicePrintHtml_(rowsOrInv){
   </table>
 
   ${hotelHeaderBlock}
+  ${mixedCurrencyWarning}
 
   <table style="margin-top:6px">
     ${lineItemHeader}
@@ -2895,15 +2917,15 @@ function buildInvoicePrintHtml_(rowsOrInv){
   </table>
 
   <table style="margin-top:6px">
-    <tr><td style="width:60%">HSN 998559</td><td class="right bold">TOTAL:</td><td class="right" style="width:15%">${r2(lcTotal)}</td></tr>
-    <tr><td class="noborder" style="border:none"></td><td class="right">Service Charge (+):</td><td class="right">${r2(serviceChargeLC)}</td></tr>
+    <tr><td style="width:60%">HSN 998559</td><td class="right bold">TOTAL:</td><td class="right" style="width:15%">${r2(total)}</td></tr>
+    <tr><td class="noborder" style="border:none"></td><td class="right">Service Charge (+):</td><td class="right">${r2(serviceChargeTotal)}</td></tr>
     <tr><td class="noborder" style="border:none"></td><td class="right">(+) Round off Amt.:</td><td class="right">${r2(roundOff)}</td></tr>
-    <tr><td class="noborder" style="border:none"></td><td class="right">(+) GST${gstPercentDisplay && gstPercentDisplay !== 'Multiple' ? ' (' + esc(gstPercentDisplay) + '%)' : ''}:</td><td class="right">${r2(gstLC)}</td></tr>
-    <tr><td class="noborder" style="border:none"></td><td class="right bold">Amount Payable:</td><td class="right bold">${r2(amountPayable)}</td></tr>
+    <tr><td class="noborder" style="border:none"></td><td class="right">(+) GST${gstPercentDisplay && gstPercentDisplay !== 'Multiple' ? ' (' + esc(gstPercentDisplay) + '%)' : ''}:</td><td class="right">${r2(gstTotal)}</td></tr>
+    <tr><td class="noborder" style="border:none"></td><td class="right bold">Amount Payable (${esc(settlementCurrency)}):</td><td class="right bold">${r2(amountPayable)}</td></tr>
   </table>
 
   <div style="margin-top:8px">SAC 998559</div>
-  <div>In Words: <b>INR ${esc(numberToWordsINR_(amountPayable))} ONLY</b></div>
+  <div>In Words: <b>${esc(settlementCurrency)} ${esc(numberToWordsINR_(amountPayable))} ONLY</b></div>
   ${clientMaster.state ? '<div>Place of Supply: <b>' + esc(clientMaster.state) + '</b></div>' : ''}
 
   <div class="small" style="margin-top:24px;line-height:1.6">
