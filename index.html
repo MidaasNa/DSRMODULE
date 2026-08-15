@@ -1993,14 +1993,20 @@ window._dsrRows = [];
 window._dsrColumnLayout = null; // loaded per-user from the backend
 window._clientsList = [];  // [{name, salesPerson, serviceCharge}, ...] — preloaded master list
 window._vendorsList = [];  // ['Vendor A', 'Vendor B', ...]
-// Consolidated-invoice-in-progress state — bookings staged via "+ Add
-// Another Booking" while creating a brand-new entry, plus the few
-// invoice-level fields (Branch/Billing Type/Client/Sales Person)
-// carried forward into the next booking's blank form for convenience.
-// Only ever populated while creating a NEW entry; reset on every fresh
-// open/close (see openInvoiceModal / openInvoiceModalForNumber / closeInvoiceModal).
+// Consolidated-invoice-in-progress state — bookings staged via
+// "+ Consolidate Another Booking" while creating a brand-new entry,
+// plus the few invoice-level fields (Branch/Billing Type/Client/Sales
+// Person) carried forward into the next booking's blank form for
+// convenience. Only ever populated while creating a NEW entry; reset
+// on every fresh open/close (see openInvoiceModal /
+// openInvoiceModalForNumber / closeInvoiceModal).
 window._pendingBookings = [];
 window._nextBookingSeed = null;
+// A one-time "✓ Saved as Invoice HAxxxxxx" banner shown after Create
+// Invoice / Save as Proforma saves a standalone entry and immediately
+// resets the form for the next one (see saveInvoice_/saveAsProforma_) —
+// consumed by renderInvoiceModal_ the moment it's shown.
+window._lastSavedNotice = null;
 
 // This app's own field suggestions (e.g. the Client/Vendor Name
 // datalists) should be the only dropdown that shows up while typing —
@@ -2155,6 +2161,7 @@ async function openInvoiceModal(rowId){
   // so an in-progress consolidated entry is untouched by this reset.)
   window._pendingBookings = [];
   window._nextBookingSeed = null;
+  window._lastSavedNotice = null;
   let rec = null, existing = null;
   if (rowId) {
     rec = data.find(r => r.rowId === rowId);
@@ -2178,6 +2185,7 @@ async function openInvoiceModal(rowId){
 async function openInvoiceModalForNumber(documentNumber, occurrenceIndex){
   window._pendingBookings = [];
   window._nextBookingSeed = null;
+  window._lastSavedNotice = null;
   const idx = occurrenceIndex || 0;
   try{
     const json = await apiGet({ action:'dsr' });
@@ -2223,6 +2231,15 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
     ? ' <span style="font-size:13px;font-weight:normal;color:#8a93a0">(Booking ' + (occIdx+1) + ' of ' + siblingCount + ' in this Consolidated Invoice)</span>'
     : '';
 
+  // Shown once, right after Create Invoice / Save as Proforma saved a
+  // standalone entry and reset the form for the next one — consumed
+  // immediately so it doesn't linger on later re-renders of this form
+  // (e.g. Consolidate, Remove booking).
+  const savedNotice = (isNew && !rowId && window._lastSavedNotice)
+    ? '<div style="background:#eafaf1;border:1px solid #b7e4c7;border-radius:8px;padding:8px 14px;margin-bottom:14px;max-width:640px;color:#1e6b3c;font-size:13px">✓ ' + escapeHtml(window._lastSavedNotice) + '</div>'
+    : '';
+  window._lastSavedNotice = null;
+
   // Shown while building up a brand-new consolidated entry, before it's saved.
   const pendingBar = (isNew && !rowId && window._pendingBookings.length)
     ? '<div style="background:#eef3f8;border:1px solid #d5e0ea;border-radius:8px;padding:10px 14px;margin-bottom:14px;max-width:640px">' +
@@ -2239,6 +2256,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
       '<div id="voucherPanelContainer"></div>' +
       '<div id="invoiceFormContent" style="flex:1;min-width:0;padding:18px 22px;overflow:auto;max-height:94vh">' +
       '<h2 style="margin:0 0 10px;color:#003366;font-size:20px">' + (existing ? (existing.documentType || 'Invoice') + ' ' + escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') + siblingNote : 'New DSR Entry') + '</h2>' +
+      savedNotice +
       pendingBar +
 
       '<div style="max-width:640px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:0 10px">' +
@@ -2348,7 +2366,7 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
           (existing
             ? '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',\'' + (existing.invoiceNumber || existing.proformaNumber) + '\',' + occIdx + ')" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">Save Changes</button>'
             : '<button onclick="saveAsProforma_(' + (rowId?'\''+rowId+'\'':'null') + ')" style="padding:9px 16px">Save as Proforma</button>' +
-              (!rowId ? '<button onclick="addAnotherBooking_()" style="padding:9px 16px">+ Add Another Booking</button>' : '') +
+              (!rowId ? '<button onclick="addAnotherBooking_()" style="padding:9px 16px" title="Groups this booking with the next one(s) under ONE shared Invoice Number">+ Consolidate Another Booking</button>' : '') +
               '<button onclick="saveInvoice_(' + (rowId?'\''+rowId+'\'':'null') + ',null)" style="padding:9px 20px;background:#003366;color:#fff;border:none;border-radius:5px;font-weight:600">' + (window._pendingBookings.length ? 'Create Consolidated Invoice (' + (window._pendingBookings.length+1) + ' bookings)' : 'Create Invoice') + '</button>') +
         '</div>' +
       '</div>' +
@@ -2605,8 +2623,12 @@ async function saveInvoice_(rowId, invoiceNumber, occurrenceIndex){
   try{
     if (invoiceNumber) {
       await apiPost({ action:'updateInvoice', invoiceNumber:invoiceNumber, occurrenceIndex:(occurrenceIndex||0), fields:fields, actor:currentUser });
-    } else if (window._pendingBookings.length) {
-      // Consolidated — every booking added via "+ Add Another Booking",
+      closeInvoiceModal();
+      if (activeTab === 'dsrTab') await loadAndRenderDsr(); else await refreshFromSheet(false);
+      return;
+    }
+    if (window._pendingBookings.length) {
+      // Consolidated — every booking added via "+ Consolidate Booking",
       // plus this last one, all saved together under one new number.
       const bookings = [...window._pendingBookings, fields];
       const result = await apiPost({ action:'createConsolidatedInvoice', rowId:rowId, bookings:bookings, documentType:'Invoice', actor:currentUser });
@@ -2616,11 +2638,21 @@ async function saveInvoice_(rowId, invoiceNumber, occurrenceIndex){
       if (activeTab === 'dsrTab') await loadAndRenderDsr(); else await refreshFromSheet(false);
       alert('Created Invoice ' + result.invoiceNumber + ' with ' + bookings.length + ' bookings.');
       return;
-    } else {
-      await apiPost({ action:'createInvoice', rowId:rowId, fields:fields, actor:currentUser });
     }
-    closeInvoiceModal();
+
+    const result = await apiPost({ action:'createInvoice', rowId:rowId, fields:fields, actor:currentUser });
     if (activeTab === 'dsrTab') await loadAndRenderDsr(); else await refreshFromSheet(false);
+    if (!rowId) {
+      // Standalone "+ New Entry" — saved. Stay open and go straight to
+      // a fresh entry instead of closing, so back-to-back invoices
+      // don't need reopening "+ New Entry" every time. A ticket-linked
+      // entry still closes as before (one ticket, one invoice).
+      window._nextBookingSeed = { branch: fields.branch, billingType: fields.billingType, client: fields.client, salesPerson: fields.salesPerson };
+      window._lastSavedNotice = 'Saved as Invoice ' + result.invoiceNumber + '. Ready for the next entry.';
+      renderInvoiceModal_(null, null, null);
+    } else {
+      closeInvoiceModal();
+    }
   }catch(err){
     alert('Could not save this entry.\n\n' + (err.message || err));
   }
@@ -2642,9 +2674,15 @@ async function saveAsProforma_(rowId){
       alert('Created Proforma ' + result.invoiceNumber + ' with ' + bookings.length + ' bookings.');
       return;
     }
-    await apiPost({ action:'createProforma', rowId:rowId, fields:fields, actor:currentUser });
-    closeInvoiceModal();
+    const result = await apiPost({ action:'createProforma', rowId:rowId, fields:fields, actor:currentUser });
     if (activeTab === 'dsrTab') await loadAndRenderDsr(); else await refreshFromSheet(false);
+    if (!rowId) {
+      window._nextBookingSeed = { branch: fields.branch, billingType: fields.billingType, client: fields.client, salesPerson: fields.salesPerson };
+      window._lastSavedNotice = 'Saved as Proforma ' + result.proformaNumber + '. Ready for the next entry.';
+      renderInvoiceModal_(null, null, null);
+    } else {
+      closeInvoiceModal();
+    }
   }catch(err){
     alert('Could not save this Proforma.\n\n' + (err.message || err));
   }
@@ -2662,6 +2700,7 @@ function addAnotherBooking_(){
   const fields = readInvoiceFormFields_();
   window._pendingBookings.push(fields);
   window._nextBookingSeed = { branch: fields.branch, billingType: fields.billingType, client: fields.client, salesPerson: fields.salesPerson };
+  window._lastSavedNotice = null;
   renderInvoiceModal_(null, null, null);
 }
 
@@ -2686,6 +2725,7 @@ async function convertProformaToInvoiceAction_(proformaNumber){
 function closeInvoiceModal(){
   window._pendingBookings = [];
   window._nextBookingSeed = null;
+  window._lastSavedNotice = null;
   const overlay = document.getElementById('invoiceModalOverlay');
   overlay.style.display = 'none';
   overlay.innerHTML = '';
