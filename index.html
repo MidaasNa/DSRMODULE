@@ -2141,22 +2141,10 @@ function computeInvoiceTotalsClient_(f){
 }
 
 
-// Compact mode: no separate label row above each field — the label
-// becomes the field's placeholder text (inputs/textareas) or a hover
-// tooltip (dropdowns, which have no real placeholder) instead, so the
-// whole form takes much less vertical space. Only matches a field
-// whose HTML starts directly with the tag (a composite field wrapped
-// in its own <div>, like Confirmation Number's input+button pair,
-// sets its own placeholder at the call site instead).
-function invoiceFieldRow_(labelText, inputHtml){
-  const label = escapeHtml(labelText);
-  let html = inputHtml;
-  if (/^<(input|textarea)\b/i.test(html) && !/\splaceholder=/i.test(html)) {
-    html = html.replace(/^<(input|textarea)\b/i, '<$1 placeholder="' + label + '"');
-  } else if (/^<select\b/i.test(html) && !/\stitle=/i.test(html)) {
-    html = html.replace(/^<select\b/i, '<select title="' + label + '"');
-  }
-  return '<div style="margin-bottom:6px">' + html + '</div>';
+function invoiceFieldRow_(labelText, inputHtml, spanCols){
+  const span = spanCols ? 'grid-column:span ' + spanCols + ';' : '';
+  return '<div style="margin-bottom:6px;' + span + '"><label style="display:block;font-size:10px;font-weight:600;color:#3f4750;margin-bottom:1px">' +
+    escapeHtml(labelText) + '</label>' + inputHtml + '</div>';
 }
 
 function invoiceSectionHeader_(text){
@@ -2281,84 +2269,79 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
           : '') +
       '</div>' +
 
-      // Two real side-by-side columns using the modal's full width —
-      // previously both halves were stacked vertically inside a single
-      // 640px-wide column, which is what forced all the scrolling even
-      // though the modal itself is ~1600px wide.
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 20px;align-items:start">' +
-
-        '<div>' +
-          invoiceSectionHeader_('1. Billing Information') +
-          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
-            invoiceFieldRow_('Billing Type', '<select id="inv_billingType" style="width:100%;padding:5px" ' + (existing?'disabled':'') + ' onchange="onInvoiceBranchChange_();recalcInvoiceTotals_()">' +
-              ['DIRECT','BTC'].map(o => '<option' + (v.billingType===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
-            invoiceFieldRow_((existing && existing.documentType === 'Proforma') ? 'Proforma Number' : 'Invoice Number', '<input disabled value="' + (existing ? escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') : 'Generated on Create/Save as Proforma') + '" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
-            invoiceFieldRow_('Client Name *', '<input id="inv_client" list="inv_clientsDatalist" value="' + escapeHtml(v.client || (rec&&rec.client) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onClientNameInput_()">' +
-              '<datalist id="inv_clientsDatalist"></datalist>') +
-            invoiceFieldRow_('Vendor Name *', '<input id="inv_vendorName" list="inv_vendorsDatalist" value="' + escapeHtml(v.vendorName || (rec&&rec.vendor) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onVendorNameInput_()">' +
-              '<datalist id="inv_vendorsDatalist">' + window._vendorsList.map(vd => '<option value="' + escapeHtml(vd.name) + '">').join('') + '</datalist>') +
-            invoiceFieldRow_('Hotel Name *', '<input id="inv_hotelName" value="' + escapeHtml(v.hotelName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('Guest Name *', '<input id="inv_guestName" value="' + escapeHtml(v.guestName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-          '</div>' +
-
-          invoiceSectionHeader_('2. Stay Details') +
-          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
-            invoiceFieldRow_('Check In *', '<input type="date" id="inv_checkin" value="' + escapeHtml(checkin) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Check Out *', '<input type="date" id="inv_checkout" value="' + escapeHtml(checkout) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Nights (auto)', '<input disabled id="inv_nightsDisplay" value="" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
-            invoiceFieldRow_('Booking Given By *', '<input id="inv_bookingGivenBy" value="' + escapeHtml(v.bookingGivenBy||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('City *', '<input id="inv_city" value="' + escapeHtml(v.city || (rec&&rec.city) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('Country *', '<input id="inv_country" value="' + escapeHtml(v.country || (rec&&rec.country) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('Hotel Chain *', '<select id="inv_hotelChain" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_hotelChainOther\').style.display=this.value===\'Other\'?\'block\':\'none\'">' +
-              HOTEL_CHAINS_.map(o => '<option' + (v.hotelChain===o?' selected':'') + '>' + o + '</option>').join('') + '</select>' +
-              '<input id="inv_hotelChainOther" placeholder="Enter hotel chain" value="' + (HOTEL_CHAINS_.indexOf(v.hotelChain)===-1?escapeHtml(v.hotelChain||''):'') + '" style="width:100%;padding:5px;margin-top:3px;box-sizing:border-box;display:' + (v.hotelChain && HOTEL_CHAINS_.indexOf(v.hotelChain)===-1 ? 'block':'none') + '">') +
-          '</div>' +
-
-          invoiceSectionHeader_('3. Occupancy') +
-          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
-            invoiceFieldRow_('Adults *', '<input type="number" id="inv_adults" value="' + escapeHtml(String(v.adults ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('Children', '<input type="number" id="inv_children" value="' + escapeHtml(String(v.children ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-            invoiceFieldRow_('Room Type *', '<input id="inv_roomType" value="' + escapeHtml(v.roomType||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-          '</div>' +
-        '</div>' +
-
-        '<div>' +
-          invoiceSectionHeader_('4. Pricing') +
-          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px 10px">' +
-            invoiceFieldRow_('Price Per Night *', '<input type="number" step="0.01" id="inv_pricePerNight" value="' + escapeHtml(String(v.pricePerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Markup Per Night *', '<input type="number" step="0.01" id="inv_markupPerNight" value="' + escapeHtml(String(v.markupPerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Currency', '<select id="inv_currency" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_roe\').value = this.value===\'INR\'?1:document.getElementById(\'inv_roe\').value; recalcInvoiceTotals_()">' +
-              CURRENCIES_.map(c => '<option' + ((v.currency||'INR')===c?' selected':'') + '>' + c + '</option>').join('') + '</select>') +
-            invoiceFieldRow_('ROE (Rate of Exchange) *', '<input type="number" step="0.0001" id="inv_roe" value="' + escapeHtml(String(v.roe ?? 1)) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-          '</div>' +
-
-          invoiceSectionHeader_('5. Billing') +
-          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px">' +
-            invoiceFieldRow_('Billing Instructions *', '<select id="inv_billingInstruction" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_billingInstructionOther\').style.display=this.value===\'Other\'?\'block\':\'none\';recalcInvoiceTotals_()">' +
-              BILLING_INSTRUCTIONS_.map(o => '<option' + (v.billingInstruction===o?' selected':'') + '>' + o + '</option>').join('') + '</select>' +
-              '<input id="inv_billingInstructionOther" placeholder="Enter billing instruction" value="' + (BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1?escapeHtml(v.billingInstruction||''):'') + '" style="width:100%;padding:5px;margin-top:3px;box-sizing:border-box;display:' + (v.billingInstruction && BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1 ? 'block':'none') + '" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('GST Billed to Client *', '<select id="inv_gstBilled" style="width:100%;padding:5px" onchange="recalcInvoiceTotals_()">' +
-              ['No','Yes'].map(o => '<option' + ((v.gstBilled||'No')===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
-            invoiceFieldRow_('GST % (if billed) *', '<input type="number" step="0.01" id="inv_gstPercent" value="' + escapeHtml(String(v.gstPercent ?? 18)) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Tax Charged by Hotel (%) *', '<input type="number" step="0.01" id="inv_taxPercent" value="' + escapeHtml(String(v.taxPercent ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Commission % (from hotel, pre-tax) *', '<input type="number" step="0.01" id="inv_commission" value="' + escapeHtml(String(v.commission ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Service Charge *', '<input type="number" step="0.01" id="inv_serviceCharge" value="' + escapeHtml(String(v.serviceCharge ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Rewards (optional)', '<input type="number" step="0.01" id="inv_reward" value="' + escapeHtml(String(v.reward ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
-            invoiceFieldRow_('Confirmation Number *', '<div style="display:flex;gap:6px">' +
-              '<input id="inv_confirmationNumber" placeholder="Confirmation Number *" value="' + escapeHtml(v.confirmationNumber || (rec&&rec.confirmationNumber) || '') + '" style="flex:1;padding:5px;box-sizing:border-box">' +
-              '<button type="button" onclick="validateConfirmationNumber_(\'' + (existing ? existing.invoiceNumber || '' : '') + '\')" style="padding:5px 10px;font-size:12px;white-space:nowrap">Validate</button>' +
-            '</div>') +
-            invoiceFieldRow_('Sales Person Name *', '<input id="inv_salesPerson" value="' + escapeHtml(v.salesPerson || (rec&&rec.handled) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
-          '</div>' +
-          invoiceFieldRow_('Remarks', '<textarea id="inv_remarks" rows="2" style="width:100%;padding:5px;box-sizing:border-box">' + escapeHtml(v.remarks || (rec&&rec.remarks) || '') + '</textarea>') +
-
-          invoiceSectionHeader_('6. Custom Charges') +
-          '<div style="font-size:11px;color:#8a93a0;margin-bottom:6px">Remarks only — doesn\'t affect Selling Price, Total Billed, or Profit. Use Service Charge above for anything that needs to actually be billed.</div>' +
-          '<div id="inv_chargesRows"></div>' +
-          '<button onclick="window._invoiceChargesDraft.push({label:\'\',amount:\'\'});renderChargesRows_()" style="margin-top:4px;padding:5px 12px">+ Add Charge</button>' +
-        '</div>' +
-
+      invoiceSectionHeader_('1. Billing Information') +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(210px, 260px));gap:6px 12px">' +
+        invoiceFieldRow_('Billing Type', '<select id="inv_billingType" style="width:100%;padding:5px" ' + (existing?'disabled':'') + ' onchange="onInvoiceBranchChange_();recalcInvoiceTotals_()">' +
+          ['DIRECT','BTC'].map(o => '<option' + (v.billingType===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
+        invoiceFieldRow_((existing && existing.documentType === 'Proforma') ? 'Proforma Number' : 'Invoice Number', '<input disabled value="' + (existing ? escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') : 'Generated on Create/Save as Proforma') + '" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
+        invoiceFieldRow_('Client Name *', '<input id="inv_client" list="inv_clientsDatalist" value="' + escapeHtml(v.client || (rec&&rec.client) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onClientNameInput_()">' +
+          '<datalist id="inv_clientsDatalist"></datalist>') +
+        invoiceFieldRow_('Vendor Name *', '<input id="inv_vendorName" list="inv_vendorsDatalist" value="' + escapeHtml(v.vendorName || (rec&&rec.vendor) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onVendorNameInput_()">' +
+          '<datalist id="inv_vendorsDatalist">' + window._vendorsList.map(vd => '<option value="' + escapeHtml(vd.name) + '">').join('') + '</datalist>') +
+        invoiceFieldRow_('Hotel Name *', '<input id="inv_hotelName" value="' + escapeHtml(v.hotelName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+        invoiceFieldRow_('Guest Name *', '<input id="inv_guestName" value="' + escapeHtml(v.guestName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
       '</div>' +
+
+      invoiceSectionHeader_('2. Stay Details') +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(210px, 260px));gap:6px 12px">' +
+        invoiceFieldRow_('Check In *', '<input type="date" id="inv_checkin" value="' + escapeHtml(checkin) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+        invoiceFieldRow_('Check Out *', '<input type="date" id="inv_checkout" value="' + escapeHtml(checkout) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+        invoiceFieldRow_('Nights (auto)', '<input disabled id="inv_nightsDisplay" value="" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
+        invoiceFieldRow_('Booking Given By *', '<input id="inv_bookingGivenBy" value="' + escapeHtml(v.bookingGivenBy||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+        invoiceFieldRow_('City *', '<input id="inv_city" value="' + escapeHtml(v.city || (rec&&rec.city) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+        invoiceFieldRow_('Country *', '<input id="inv_country" value="' + escapeHtml(v.country || (rec&&rec.country) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+        invoiceFieldRow_('Hotel Chain *', '<select id="inv_hotelChain" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_hotelChainOther\').style.display=this.value===\'Other\'?\'block\':\'none\'">' +
+          HOTEL_CHAINS_.map(o => '<option' + (v.hotelChain===o?' selected':'') + '>' + o + '</option>').join('') + '</select>' +
+          '<input id="inv_hotelChainOther" placeholder="Enter hotel chain" value="' + (HOTEL_CHAINS_.indexOf(v.hotelChain)===-1?escapeHtml(v.hotelChain||''):'') + '" style="width:100%;padding:5px;margin-top:3px;box-sizing:border-box;display:' + (v.hotelChain && HOTEL_CHAINS_.indexOf(v.hotelChain)===-1 ? 'block':'none') + '">') +
+        invoiceFieldRow_('Adults *', '<input type="number" id="inv_adults" value="' + escapeHtml(String(v.adults ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+        invoiceFieldRow_('Children', '<input type="number" id="inv_children" value="' + escapeHtml(String(v.children ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+        invoiceFieldRow_('Room Type *', '<input id="inv_roomType" value="' + escapeHtml(v.roomType||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+      '</div>' +
+
+      invoiceSectionHeader_('3. Pricing') +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(210px, 260px));gap:6px 12px">' +
+        invoiceFieldRow_('Price Per Night *', '<input type="number" step="0.01" id="inv_pricePerNight" value="' + escapeHtml(String(v.pricePerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+        invoiceFieldRow_('Markup Per Night *', '<input type="number" step="0.01" id="inv_markupPerNight" value="' + escapeHtml(String(v.markupPerNight ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+        invoiceFieldRow_('Currency', '<select id="inv_currency" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_roe\').value = this.value===\'INR\'?1:document.getElementById(\'inv_roe\').value; recalcInvoiceTotals_()">' +
+          CURRENCIES_.map(c => '<option' + ((v.currency||'INR')===c?' selected':'') + '>' + c + '</option>').join('') + '</select>') +
+        invoiceFieldRow_('ROE (Rate of Exchange) *', '<input type="number" step="0.0001" id="inv_roe" value="' + escapeHtml(String(v.roe ?? 1)) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+      '</div>' +
+
+      invoiceSectionHeader_('4. Billing') +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(210px, 260px));gap:6px 12px">' +
+        invoiceFieldRow_('Billing Instructions *', '<select id="inv_billingInstruction" style="width:100%;padding:5px" onchange="document.getElementById(\'inv_billingInstructionOther\').style.display=this.value===\'Other\'?\'block\':\'none\';recalcInvoiceTotals_()">' +
+          BILLING_INSTRUCTIONS_.map(o => '<option' + (v.billingInstruction===o?' selected':'') + '>' + o + '</option>').join('') + '</select>' +
+          '<input id="inv_billingInstructionOther" placeholder="Enter billing instruction" value="' + (BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1?escapeHtml(v.billingInstruction||''):'') + '" style="width:100%;padding:5px;margin-top:3px;box-sizing:border-box;display:' + (v.billingInstruction && BILLING_INSTRUCTIONS_.indexOf(v.billingInstruction)===-1 ? 'block':'none') + '" oninput="recalcInvoiceTotals_()">') +
+        invoiceFieldRow_('GST Billed to Client *', '<select id="inv_gstBilled" style="width:100%;padding:5px" onchange="recalcInvoiceTotals_()">' +
+          ['No','Yes'].map(o => '<option' + ((v.gstBilled||'No')===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
+        invoiceFieldRow_('GST % (if billed) *', '<input type="number" step="0.01" id="inv_gstPercent" value="' + escapeHtml(String(v.gstPercent ?? 18)) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+        invoiceFieldRow_('Tax Charged by Hotel (%) *', '<input type="number" step="0.01" id="inv_taxPercent" value="' + escapeHtml(String(v.taxPercent ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+        invoiceFieldRow_('Commission % (from hotel, pre-tax) *', '<input type="number" step="0.01" id="inv_commission" value="' + escapeHtml(String(v.commission ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+        invoiceFieldRow_('Service Charge *', '<input type="number" step="0.01" id="inv_serviceCharge" value="' + escapeHtml(String(v.serviceCharge ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+        invoiceFieldRow_('Rewards (optional)', '<input type="number" step="0.01" id="inv_reward" value="' + escapeHtml(String(v.reward ?? '')) + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="recalcInvoiceTotals_()">') +
+        invoiceFieldRow_('Confirmation Number *', '<div style="display:flex;gap:6px">' +
+          '<input id="inv_confirmationNumber" value="' + escapeHtml(v.confirmationNumber || (rec&&rec.confirmationNumber) || '') + '" style="flex:1;padding:5px;box-sizing:border-box">' +
+          '<button type="button" onclick="validateConfirmationNumber_(\'' + (existing ? existing.invoiceNumber || '' : '') + '\')" style="padding:5px 10px;font-size:12px;white-space:nowrap">Validate</button>' +
+        '</div>', 2) +
+        invoiceFieldRow_('Sales Person Name *', '<input id="inv_salesPerson" value="' + escapeHtml(v.salesPerson || (rec&&rec.handled) || '') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
+      '</div>' +
+      invoiceFieldRow_('Remarks', '<textarea id="inv_remarks" rows="2" style="width:100%;padding:5px;box-sizing:border-box">' + escapeHtml(v.remarks || (rec&&rec.remarks) || '') + '</textarea>') +
+
+      // Custom Charges — collapsed behind a toggle by default (it's the
+      // least-used section), so it doesn't take up space unless it's
+      // actually needed. Starts open automatically when editing an
+      // entry that already has charges filled in.
+      (function(){
+        const hasChargesAlready = window._invoiceChargesDraft.some(c => (c.label||'').trim() || String(c.amount||'').trim());
+        return '<button type="button" onclick="toggleCustomChargesPanel_()" style="margin:4px 0;padding:5px 12px;font-size:12px">' +
+                 '<span id="inv_chargesToggleIcon">' + (hasChargesAlready ? '▾' : '▸') + '</span> Custom Charges' +
+               '</button>' +
+               '<div id="inv_chargesPanel" style="display:' + (hasChargesAlready ? 'block' : 'none') + '">' +
+                 '<div style="font-size:11px;color:#8a93a0;margin-bottom:6px">Remarks only — doesn\'t affect Selling Price, Total Billed, or Profit. Use Service Charge above for anything that needs to actually be billed.</div>' +
+                 '<div id="inv_chargesRows"></div>' +
+                 '<button onclick="window._invoiceChargesDraft.push({label:\'\',amount:\'\'});renderChargesRows_()" style="margin-top:4px;padding:5px 12px">+ Add Charge</button>' +
+               '</div>';
+      })() +
 
       '<div id="inv_totals" style="margin-top:14px;padding:10px 12px;background:#f7f8fa;border-radius:8px;font-size:13px"></div>' +
 
@@ -2457,6 +2440,14 @@ async function validateConfirmationNumber_(currentInvoiceNumber){
   }catch(err){
     alert('Could not check.\n\n' + (err.message || err));
   }
+}
+
+function toggleCustomChargesPanel_(){
+  const panel = document.getElementById('inv_chargesPanel');
+  const icon = document.getElementById('inv_chargesToggleIcon');
+  const open = panel.style.display !== 'none';
+  panel.style.display = open ? 'none' : 'block';
+  icon.textContent = open ? '▸' : '▾';
 }
 
 function renderChargesRows_(){
