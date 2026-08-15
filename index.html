@@ -155,6 +155,20 @@ tr.overdue-row td{border-color:#f3d4c0}
  .main-layout{flex-direction:column}
  .pending-panel{width:100%;max-height:300px}
 }
+
+/* No up/down spinner arrows on number fields (ROE, prices, percentages,
+   etc.) anywhere in the app — still type="number" underneath (numeric
+   keyboard on mobile, basic validation), just without the spinner UI,
+   so it reads as a normal text-like field. */
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button{
+  -webkit-appearance:none;
+  margin:0;
+}
+input[type=number]{
+  -moz-appearance:textfield;
+  appearance:textfield;
+}
 </style>
 </head>
 <body>
@@ -2274,10 +2288,16 @@ function renderInvoiceModal_(rowId, rec, existing, occurrenceIndex, siblingCount
         invoiceFieldRow_('Billing Type', '<select id="inv_billingType" style="width:100%;padding:5px" ' + (existing?'disabled':'') + ' onchange="onInvoiceBranchChange_();recalcInvoiceTotals_()">' +
           ['DIRECT','BTC'].map(o => '<option' + (v.billingType===o?' selected':'') + '>' + o + '</option>').join('') + '</select>') +
         invoiceFieldRow_((existing && existing.documentType === 'Proforma') ? 'Proforma Number' : 'Invoice Number', '<input disabled value="' + (existing ? escapeHtml(existing.invoiceNumber || existing.proformaNumber || '') : 'Generated on Create/Save as Proforma') + '" style="width:100%;padding:5px;background:#f2f4f6;box-sizing:border-box">') +
-        invoiceFieldRow_('Client Name *', '<input id="inv_client" list="inv_clientsDatalist" value="' + escapeHtml(v.client || (rec&&rec.client) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onClientNameInput_()">' +
-          '<datalist id="inv_clientsDatalist"></datalist>') +
-        invoiceFieldRow_('Vendor Name *', '<input id="inv_vendorName" list="inv_vendorsDatalist" value="' + escapeHtml(v.vendorName || (rec&&rec.vendor) || '') + '" style="width:100%;padding:5px;box-sizing:border-box" oninput="onVendorNameInput_()">' +
-          '<datalist id="inv_vendorsDatalist">' + window._vendorsList.map(vd => '<option value="' + escapeHtml(vd.name) + '">').join('') + '</datalist>') +
+        invoiceFieldRow_('Client Name *', '<select id="inv_client" data-initial="' + escapeHtml(v.client || (rec&&rec.client) || '') + '" style="width:100%;padding:5px" onchange="onClientNameInput_()"><option value="">— Select Client —</option></select>') +
+        invoiceFieldRow_('Vendor Name *', (function(){
+          const names = window._vendorsList.map(vd => vd.name);
+          const currentValue = v.vendorName || (rec&&rec.vendor) || '';
+          if (currentValue && names.indexOf(currentValue) === -1) names.unshift(currentValue);
+          return '<select id="inv_vendorName" style="width:100%;padding:5px" onchange="onVendorNameInput_()">' +
+            '<option value="">— Select Vendor —</option>' +
+            names.map(n => '<option' + (n===currentValue?' selected':'') + '>' + escapeHtml(n) + '</option>').join('') +
+          '</select>';
+        })()) +
         invoiceFieldRow_('Hotel Name *', '<input id="inv_hotelName" value="' + escapeHtml(v.hotelName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
         invoiceFieldRow_('Guest Name *', '<input id="inv_guestName" value="' + escapeHtml(v.guestName||'') + '" style="width:100%;padding:5px;box-sizing:border-box">') +
       '</div>' +
@@ -2467,21 +2487,28 @@ function renderChargesRows_(){
 // Person and Service Charge from that client's saved defaults, but ONLY
 // into fields that are still empty, so it never overwrites something
 // already typed or an existing invoice's real values while editing.
-// Rebuilds the Client Name datalist to only offer clients mapped to the
+// Rebuilds the Client Name dropdown to only offer clients mapped to the
 // currently-selected Branch — called on modal open and whenever the
 // Branch dropdown changes. If no branch is selected, every client is
-// offered (unfiltered), same as before this feature existed.
+// offered (unfiltered), same as before this feature existed. Keeps
+// whatever client is currently selected in the list even if it falls
+// outside the filter, so narrowing Branch/Billing Type never silently
+// blanks out a client that's already chosen.
 function refreshClientDatalist_(){
-  const datalist = document.getElementById('inv_clientsDatalist');
+  const select = document.getElementById('inv_client');
   const branchEl = document.getElementById('inv_branch');
   const billingTypeEl = document.getElementById('inv_billingType');
-  if (!datalist) return;
+  if (!select) return;
   const branch = branchEl ? branchEl.value : '';
   const billingType = billingTypeEl ? billingTypeEl.value : '';
+  const currentValue = select.value || select.dataset.initial || '';
   const clients = window._clientsList.filter(c =>
     (!branch || c.branch === branch) && (!billingType || c.billingType === billingType)
   );
-  datalist.innerHTML = clients.map(c => '<option value="' + escapeHtml(c.name) + '">').join('');
+  const names = clients.map(c => c.name);
+  if (currentValue && names.indexOf(currentValue) === -1) names.unshift(currentValue);
+  select.innerHTML = '<option value="">— Select Client —</option>' +
+    names.map(n => '<option' + (n===currentValue?' selected':'') + '>' + escapeHtml(n) + '</option>').join('');
 }
 
 function onInvoiceBranchChange_(){
@@ -3477,6 +3504,13 @@ function fillFieldFromVoucher_(fieldId){
     el.value = parsed.toISOString().split('T')[0];
   } else {
     el.value = text;
+    // Client Name / Vendor Name are dropdowns now (master-list only) —
+    // a select silently ignores .value if it doesn't exactly match one
+    // of its options, so check it actually landed before claiming success.
+    if (el.tagName === 'SELECT' && el.value !== text) {
+      alert('"' + text + '" isn\'t in the ' + (fieldId === 'inv_client' ? 'Client' : 'Vendor') + ' list — pick the closest match from the dropdown instead.');
+      return;
+    }
   }
   el.style.background = '#eaf3ea';
   setTimeout(() => { el.style.background = ''; }, 1200);
