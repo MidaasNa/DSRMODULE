@@ -500,6 +500,8 @@ tr.needs-details-row td{border-color:#e1cdec}
 
 <div id="dsrColumnPicker" style="display:none;margin-top:10px;padding:10px;background:#f7f0fb;border:1px solid #e1cdec;border-radius:6px;max-height:160px;overflow-y:auto"></div>
 
+<div id="dsrFiltersContainer" style="margin-top:10px"></div>
+
 <div style="margin-top:14px;display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end">
   <div>
     <label style="display:block;font-size:12px;color:#4a5560">Search by Invoice / Proforma / Credit Note Number</label>
@@ -520,6 +522,7 @@ tr.needs-details-row td{border-color:#e1cdec}
 <tbody id="dsrBody"></tbody>
 </table>
 </div>
+<div id="dsrPager" style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:13px;color:#4a5560"></div>
 <p id="dsrEmpty" style="display:none;color:#4a5560;text-align:center;padding:20px">No entries to show.</p>
 </div>
 </div>
@@ -648,7 +651,9 @@ tr.needs-details-row td{border-color:#e1cdec}
 <div class="field-grid">
 <div class="field"><label>Billing Type</label>
   <select id="dsrBillingType" onchange="dsrRecalc_()"><option value="BTC">BTC</option><option value="DIRECT">DIRECT</option></select></div>
-<div class="field"><label>Confirmation Number</label><input id="dsrConfirmationNumber"></div>
+<div class="field"><label>Confirmation Number</label><input id="dsrConfirmationNumber" oninput="dsrCheckConfirmationDuplicate_()">
+  <div id="dsrConfirmationNumberWarning" style="color:#b26a00;font-size:12px;margin-top:2px"></div>
+</div>
 
 <div class="field"><label>Client</label><input id="dsrClient" list="dsrClientList" onchange="onDsrClientChange_()"></div>
 <div class="field"><label>Vendor</label><input id="dsrVendorName" list="dsrVendorList" onchange="onDsrVendorChange_()"></div>
@@ -713,11 +718,20 @@ tr.needs-details-row td{border-color:#e1cdec}
 
 <div style="margin-top:14px;padding:12px;background:#f0f4f8;border-radius:6px;font-size:13px" id="dsrTotalsPreview"></div>
 
+<div id="dsrPendingBookingsNote" style="display:none;margin-top:10px;padding:10px;background:#e8f0fe;border:1px solid #c3d9fc;border-radius:6px;font-size:13px"></div>
+
 <div id="dsrEntryError" style="color:#b71c1c;font-weight:bold;min-height:18px;margin-top:8px"></div>
-<div style="text-align:right;margin-top:10px">
-<button onclick="closeDsrEntryModal()" style="background:#ddd;color:#222">Cancel</button>
-<button id="dsrSaveProformaBtn" onclick="saveDsrEntry_('Proforma')" style="background:#4a5560;color:white">Save as Proforma</button>
-<button id="dsrSaveInvoiceBtn" onclick="saveDsrEntry_('Invoice')" style="background:#003366;color:white">Create Invoice</button>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+  <div id="dsrNavButtons">
+    <button id="dsrPrevBtn" onclick="navigateDsrEntry_(-1)" style="padding:9px 14px">‹ Previous</button>
+    <button id="dsrNextBtn" onclick="navigateDsrEntry_(1)" style="padding:9px 14px">Next ›</button>
+  </div>
+  <div>
+    <button id="dsrAddBookingBtn" onclick="addAnotherBookingToConsolidated_()" style="background:#4a5560;color:white">+ Add Another Booking</button>
+    <button onclick="closeDsrEntryModal()" style="background:#ddd;color:#222">Cancel</button>
+    <button id="dsrSaveProformaBtn" onclick="saveDsrEntry_('Proforma')" style="background:#4a5560;color:white">Save as Proforma</button>
+    <button id="dsrSaveInvoiceBtn" onclick="saveDsrEntry_('Invoice')" style="background:#003366;color:white">Create Invoice</button>
+  </div>
 </div>
 </div>
 </div>
@@ -1247,6 +1261,7 @@ function render(){
   if (activeTab === 'reconfirmTab') renderReconfirmTable(visible, s);
   if (activeTab === 'dashboardTab' && currentUser.role === 'Manager') renderDashboard();
   if (activeTab === 'chartsTab' && currentUser.role === 'Manager') renderCharts();
+  if (activeTab === 'dsrTab') renderDsrGrid();
 
   updateOverdueBadge();
   updateMissingDetailsBadge();
@@ -3786,6 +3801,7 @@ async function loadAndRenderDsr(){
   try{
     const json = await apiGet({ action:'dsr' });
     _dsrCache = json.invoices || [];
+    _dsrPage = 0;
     renderDsrGrid();
   }catch(err){
     errEl.textContent = err.message || 'Could not load DSR entries.';
@@ -3800,6 +3816,7 @@ async function dsrSearchByInvoice_(){
   try{
     const json = await apiGet({ action:'dsr', referenceInvoiceNumber:q });
     _dsrCache = json.invoices || [];
+    _dsrPage = 0;
     renderDsrGrid();
   }catch(err){
     errEl.textContent = err.message || 'Search failed.';
@@ -3814,33 +3831,84 @@ async function dsrSearchByConfirmation_(){
   try{
     const json = await apiGet({ action:'dsr', referenceInvoiceNumber:q });
     _dsrCache = json.invoices || [];
+    _dsrPage = 0;
     renderDsrGrid();
   }catch(err){
     errEl.textContent = err.message || 'Search failed.';
   }
 }
 
+const DSR_PAGE_SIZE = 50;
+let _dsrPage = 0;
+
 function renderDsrGrid(){
   const head = document.getElementById('dsrTableHeadRow');
   const body = document.getElementById('dsrBody');
   const emptyEl = document.getElementById('dsrEmpty');
+  const pagerEl = document.getElementById('dsrPager');
   const visibleCols = DSR_COLUMNS_.filter(([key]) => _dsrColumnVisibility[key] !== false);
+
+  updateFilterNames_('dsr_client', _dsrCache.map(inv => inv.client));
+  updateFilterNames_('dsr_branch', _dsrCache.map(inv => inv.branch));
+  const clientSet = getFilterSet_('dsr_client');
+  const branchSet = getFilterSet_('dsr_branch');
+  const filtered = _dsrCache
+    .filter(inv => clientSet.size === 0 || clientSet.has(inv.client))
+    .filter(inv => branchSet.size === 0 || branchSet.has(inv.branch));
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / DSR_PAGE_SIZE));
+  if (_dsrPage >= totalPages) _dsrPage = totalPages - 1;
+  if (_dsrPage < 0) _dsrPage = 0;
+  const pageRows = filtered.slice(_dsrPage * DSR_PAGE_SIZE, (_dsrPage + 1) * DSR_PAGE_SIZE);
 
   head.innerHTML = visibleCols.map(([,label]) => `<th style="padding:6px">${escapeHtml(label)}</th>`).join('') + '<th style="padding:6px">Actions</th>';
 
-  emptyEl.style.display = _dsrCache.length === 0 ? 'block' : 'none';
+  emptyEl.style.display = filtered.length === 0 ? 'block' : 'none';
 
-  body.innerHTML = _dsrCache.map(inv => {
+  body.innerHTML = pageRows.map(inv => {
     const cells = visibleCols.map(([key]) => {
       let val = key === 'docNumber' ? dsrDocNumber_(inv) : inv[key];
       if (key === 'checkin' || key === 'checkout' || key === 'createdAt') val = val ? toDisplayDate(String(val).slice(0,10)) : '';
       return `<td style="padding:6px">${escapeHtml(val != null ? String(val) : '')}</td>`;
     }).join('');
+    // Credit Note only makes sense against a real Invoice (a Proforma
+    // or an existing Credit Note has no Invoice Number to reference).
+    const creditNoteBtn = inv.documentType === 'Invoice'
+      ? `<button onclick="openCreditNoteModal('${cssEscape(inv.invoiceNumber)}')" style="padding:5px 10px;font-size:12px;background:#6a1b9a;color:white">Credit Note</button>`
+      : '';
     return `<tr>${cells}<td style="padding:6px;white-space:nowrap">
       <button onclick="openDsrEntryModal(${inv.id})" style="padding:5px 10px;font-size:12px">Edit</button>
+      <button onclick="duplicateDsrEntry_(${inv.id})" style="padding:5px 10px;font-size:12px">Duplicate</button>
+      ${creditNoteBtn}
       <button onclick="deleteDsrEntry_(${inv.id})" style="padding:5px 10px;font-size:12px;background:#b71c1c;color:white">Delete</button>
     </td></tr>`;
   }).join('');
+
+  pagerEl.innerHTML = filtered.length === 0 ? '' : `
+    <span>Showing ${_dsrPage * DSR_PAGE_SIZE + 1}–${Math.min((_dsrPage + 1) * DSR_PAGE_SIZE, filtered.length)} of ${filtered.length}</span>
+    <span>
+      <button onclick="dsrGoToPage_(${_dsrPage - 1})" ${_dsrPage === 0 ? 'disabled' : ''} style="padding:5px 12px">‹ Prev</button>
+      <span style="margin:0 10px">Page ${_dsrPage + 1} of ${totalPages}</span>
+      <button onclick="dsrGoToPage_(${_dsrPage + 1})" ${_dsrPage >= totalPages - 1 ? 'disabled' : ''} style="padding:5px 12px">Next ›</button>
+    </span>
+  `;
+}
+
+function dsrGoToPage_(page){
+  _dsrPage = page;
+  renderDsrGrid();
+}
+
+async function duplicateDsrEntry_(id){
+  if (!confirm('Create a duplicate of this entry with a new invoice number?')) return;
+  const errEl = document.getElementById('dsrError');
+  try{
+    const res = await apiPost({ action:'duplicateInvoice', id });
+    await loadAndRenderDsr();
+    alert(`Duplicated as Invoice ${res.invoiceNumber}.`);
+  }catch(err){
+    errEl.textContent = err.message || 'Could not duplicate entry.';
+  }
 }
 
 async function deleteDsrEntry_(id){
@@ -3961,6 +4029,25 @@ function dsrGatherFields_(){
   };
 }
 
+// Warns (doesn't block — hotels sometimes reuse/similar-format confirmation
+// numbers legitimately) if this confirmation number is already used on a
+// DIFFERENT entry. Checks the already-loaded _dsrCache, so it works
+// instantly without a network round trip; if the DSR tab hasn't been
+// opened yet this session, the check is skipped rather than erroring.
+function dsrCheckConfirmationDuplicate_(){
+  const warnEl = document.getElementById('dsrConfirmationNumberWarning');
+  if (!warnEl) return;
+  const value = document.getElementById('dsrConfirmationNumber').value.trim();
+  const currentId = Number(document.getElementById('dsrEntryId').value) || null;
+
+  if (!value || !_dsrCache.length) { warnEl.textContent = ''; return; }
+
+  const matches = _dsrCache.filter(inv => inv.id !== currentId && String(inv.confirmationNumber || '').trim() === value);
+  warnEl.textContent = matches.length
+    ? `⚠ Confirmation number "${value}" is also used on: ${matches.map(dsrDocNumber_).join(', ')}`
+    : '';
+}
+
 function dsrRecalc_(){
   const f = dsrGatherFields_();
   const t = dsrComputeTotalsPreview_(f);
@@ -3979,12 +4066,25 @@ function dsrRecalc_(){
 function openDsrEntryModal(invoiceId, rowId){
   document.getElementById('dsrEntryId').value = invoiceId || '';
   document.getElementById('dsrEntryRowId').value = rowId || '';
+  window._pendingBookings = [];
+  updateDsrPendingBookingsNote_();
 
   const existing = invoiceId ? _dsrCache.find(i => i.id === invoiceId) : null;
   document.getElementById('dsrEntryDocType').value = existing ? existing.documentType : '';
   document.getElementById('dsrEntryTitle').textContent = existing
     ? `${existing.documentType} ${dsrDocNumber_(existing)}`
     : 'New DSR Entry';
+
+  // Previous/Next only makes sense stepping through already-saved
+  // entries; "Add Another Booking" (consolidated) only makes sense
+  // while creating something brand new — the two are mutually exclusive.
+  document.getElementById('dsrNavButtons').style.display = existing ? '' : 'none';
+  document.getElementById('dsrAddBookingBtn').style.display = existing ? 'none' : '';
+  if (existing) {
+    const idx = _dsrCache.findIndex(i => i.id === invoiceId);
+    document.getElementById('dsrPrevBtn').disabled = idx <= 0;
+    document.getElementById('dsrNextBtn').disabled = idx === -1 || idx >= _dsrCache.length - 1;
+  }
 
   const setVal = (id, v) => { document.getElementById(id).value = v != null ? v : ''; };
   const bookingPrefill = rowId ? (data.find(r => r.rowId === rowId) || {}) : {};
@@ -4038,6 +4138,7 @@ function openDsrEntryModal(invoiceId, rowId){
   document.getElementById('dsrEntryError').textContent = '';
   document.getElementById('dsrEntryModal').style.display = 'flex';
   dsrRecalc_();
+  dsrCheckConfirmationDuplicate_();
 }
 
 function closeDsrEntryModal(){
@@ -4053,11 +4154,16 @@ async function saveDsrEntry_(docType){
 
   const invoiceId = document.getElementById('dsrEntryId').value;
   const rowId = document.getElementById('dsrEntryRowId').value || null;
+  const pending = window._pendingBookings || [];
 
   try{
     let res;
     if (invoiceId) {
       res = await apiPost({ action:'updateInvoice', id:Number(invoiceId), fields });
+    } else if (pending.length > 0) {
+      // Consolidated: every previously-added booking, plus whatever's
+      // currently in the form, all sharing one new invoice/proforma number.
+      res = await apiPost({ action:'createConsolidatedInvoice', rowId, bookings:[...pending, fields], documentType:docType });
     } else if (docType === 'Proforma') {
       res = await apiPost({ action:'createProforma', rowId, fields });
     } else {
@@ -4075,17 +4181,72 @@ async function saveDsrEntry_(docType){
     }
 
     await loadAndRenderDsr();
-    if (res.invoiceNumber) alert(`Invoice ${res.invoiceNumber} created.`);
+    if (res.count) alert(`Consolidated ${res.invoiceNumber} created with ${res.count} bookings.`);
+    else if (res.invoiceNumber) alert(`Invoice ${res.invoiceNumber} created.`);
     else if (res.proformaNumber) alert(`Proforma ${res.proformaNumber} created.`);
   }catch(err){
     errEl.textContent = err.message || 'Could not save entry.';
   }
 }
 
+// ---- Previous/Next navigation (editing an existing entry only) ----
+
+function navigateDsrEntry_(delta){
+  const currentId = Number(document.getElementById('dsrEntryId').value) || null;
+  if (!currentId || !_dsrCache.length) return;
+  const idx = _dsrCache.findIndex(inv => inv.id === currentId);
+  if (idx === -1) return;
+  const nextIdx = idx + delta;
+  if (nextIdx < 0 || nextIdx >= _dsrCache.length) return;
+  openDsrEntryModal(_dsrCache[nextIdx].id);
+}
+
+// ---- Consolidated invoice: add the current form as one booking, then
+//      clear booking-specific fields so the next one can be entered ----
+
+function addAnotherBookingToConsolidated_(){
+  const errEl = document.getElementById('dsrEntryError');
+  const fields = dsrGatherFields_();
+  if (!fields.client) { errEl.textContent = 'Client is required before adding another booking.'; return; }
+  if (!fields.hotelName) { errEl.textContent = 'Hotel Name is required before adding another booking.'; return; }
+  errEl.textContent = '';
+
+  window._pendingBookings = window._pendingBookings || [];
+  window._pendingBookings.push(fields);
+  updateDsrPendingBookingsNote_();
+
+  // Clear booking-specific fields for the next entry; Client, Billing
+  // Type, Branch, and Sales Person stay — a consolidated invoice shares
+  // those across every booking under it.
+  ['dsrVendorName','dsrHotelName','dsrGuestName','dsrCheckin','dsrCheckout','dsrCity','dsrCountry',
+   'dsrHotelChain','dsrBookingGivenBy','dsrAdults','dsrChildren','dsrRoomType','dsrPricePerNight',
+   'dsrMarkupPerNight','dsrTaxPercent','dsrCommission','dsrServiceCharge','dsrReward',
+   'dsrConfirmationNumber','dsrRemarks','dsrEmpId','dsrDp','dsrTripId','dsrProjectId','dsrL1','dsrL2','dsrMatrix']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('dsrGstPercent').value = 18;
+  dsrRecalc_();
+  dsrCheckConfirmationDuplicate_();
+}
+
+function updateDsrPendingBookingsNote_(){
+  const note = document.getElementById('dsrPendingBookingsNote');
+  const n = (window._pendingBookings || []).length;
+  if (n === 0) {
+    note.style.display = 'none';
+    document.getElementById('dsrSaveInvoiceBtn').textContent = 'Create Invoice';
+    return;
+  }
+  note.style.display = 'block';
+  note.textContent = `${n} booking${n > 1 ? 's' : ''} added so far — filling in the form below and saving adds one more under the same shared invoice number.`;
+  document.getElementById('dsrSaveInvoiceBtn').textContent = `Create Consolidated Invoice (${n + 1} bookings)`;
+}
+
 // ---- Credit Note modal ----
 
-function openCreditNoteModal(){
-  document.getElementById('cnReferenceInvoiceNumber').value = '';
+function openCreditNoteModal(referenceInvoiceNumber){
+  const refInput = document.getElementById('cnReferenceInvoiceNumber');
+  refInput.value = referenceInvoiceNumber || '';
+  refInput.readOnly = !!referenceInvoiceNumber; // locked when opened from a specific invoice's row, so it can't be accidentally changed
   document.getElementById('cnCreditAmount').value = '';
   document.getElementById('cnCreditReason').value = '';
   document.getElementById('cnSalesPerson').value = '';
@@ -4311,6 +4472,12 @@ window.onload = function(){
       buildFilterWidgetHtml_('charts_branch', 'Filter by Branch') +
       buildFilterWidgetHtml_('charts_employee', 'Filter by Employee') +
       buildFilterWidgetHtml_('charts_client', 'Filter by Client');
+  }
+  const dsrFiltersEl = document.getElementById('dsrFiltersContainer');
+  if (dsrFiltersEl) {
+    dsrFiltersEl.innerHTML =
+      buildFilterWidgetHtml_('dsr_client', 'Filter by Client') +
+      buildFilterWidgetHtml_('dsr_branch', 'Filter by Branch');
   }
 
   tryResumeSession();
